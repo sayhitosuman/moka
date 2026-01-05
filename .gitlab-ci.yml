@@ -1,0 +1,42 @@
+# GitLab CI/CD Pipeline
+# Standard build for generic deployment
+
+image: node:18
+
+# Cache node_modules to speed up builds
+cache:
+  paths:
+    - node_modules/
+
+# Define stages
+stages:
+  - build
+  - deploy
+
+# Install dependencies
+before_script:
+  - npm ci
+
+# Standard Build Job
+build:
+  stage: build
+  script:
+    - echo "Building project..."
+    - npm run build
+  artifacts:
+    paths:
+      - dist/
+    expire_in: 1 week
+
+# GitLab Pages Deployment (Optional - enables hosting on GitLab directly)
+pages:
+  stage: deploy
+  script:
+    # GitLab Pages requires the artifact be in a folder named 'public'
+    - rm -rf public
+    - mv dist public
+  artifacts:
+    paths:
+      - public
+  only:
+    - main

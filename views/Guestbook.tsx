@@ -1,0 +1,3001 @@
+
+import React, { useState, useEffect, useRef } from 'react';
+import { MessageSquare, ArrowBigUp, ArrowBigDown, Share2, User, Search, X, Settings, LogOut, Edit2, Trash2, Camera, Users, UserPlus, UserMinus, UserCheck, ChevronLeft, Send, ShieldCheck, Activity, MessageCircle, Menu, Filter, Image as ImageIcon, Paperclip, Loader, Copy, Download, Plus, Minimize2, Layout, PlaySquare, Compass, Heart, Bell, Check, Info } from 'lucide-react';
+import { UserProfile, Comment, Space, AppNotification } from '../types';
+import {
+  subscribeToStream, postThought, votePost, updateUserProfile, deletePost, getPublicUserProfile, sendFriendRequest, acceptFriendRequest, declineFriendRequest, unfriend, fetchUserNetwork, fetchSpaces, createSpace, subscribeToNotifications, markNotificationRead, fetchNotifications, globalSearch, SearchResult, fetchIsMember, joinSpace, leaveSpace, fetchUserSpaces, fetchSpaceMembers, updateSpace, respondToSpaceRequest, giveAdminRole, fetchSpaceMembership, fetchPendingMembers, subscribeToFeed, uploadMedia, removeMember
+} from '../services/store';
+import { Window, Button, Input, Modal, THEME } from '../components/UI';
+import { toBlob } from 'html-to-image';
+
+const formatDate = (timestamp: any) => {
+  if (!timestamp) return '...';
+  const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
+  return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
+// --- INLINE INPUT COMPONENT ---
+const InlineInput = ({
+  onSubmit,
+  onCancel,
+  placeholder = "Write a reply...",
+  buttonLabel = "Reply",
+  autoFocus = false,
+  className = ""
+}: {
+  onSubmit: (text: string, file?: File) => void;
+  onCancel?: () => void;
+  placeholder?: string;
+  buttonLabel?: string;
+  autoFocus?: boolean;
+  className?: string;
+}) => {
+  const [text, setText] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const handleSubmit = () => {
+    if (!text.trim() && !file) return;
+    onSubmit(text, file || undefined);
+    setText('');
+    setFile(null);
+    setPreview(null);
+    if (onCancel) onCancel();
+  };
+
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) {
+      setFile(f);
+      setPreview(URL.createObjectURL(f));
+    }
+  };
+
+  return (
+    <div className={`mt-2 animate-fade-in ${className}`}>
+      <textarea
+        className="w-full bg-white border border-black p-2 text-sm focus:outline-none min-h-[80px] shadow-sm placeholder-gray-400"
+        placeholder={placeholder}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        autoFocus={autoFocus}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && e.ctrlKey) handleSubmit();
+        }}
+      />
+      {preview && (
+        <div className="mt-2 relative inline-block">
+          {file?.type.startsWith('video') ? (
+            <video src={preview} className="h-20 w-auto border border-black" muted />
+          ) : (
+            <img src={preview} className="h-20 w-auto border border-black object-cover" />
+          )}
+          <button onClick={() => { setFile(null); setPreview(null); }} className="absolute -top-2 -right-2 bg-black text-white rounded-full p-0.5 shadow-md">
+            <X size={10} />
+          </button>
+        </div>
+      )}
+      <div className="flex justify-between items-center mt-2">
+        <div className="flex gap-2">
+          <input type="file" ref={fileRef} className="hidden" accept="image/*,video/*" onChange={handleFile} />
+          <button onClick={() => fileRef.current?.click()} className="p-1.5 text-gray-400 hover:text-black hover:bg-gray-100 rounded-lg transition-colors">
+            <ImageIcon size={16} />
+          </button>
+        </div>
+        <div className="flex gap-2">
+          {onCancel && <Button onClick={onCancel} className="text-xs px-2 py-1 border-transparent hover:bg-gray-100 shadow-none">Cancel</Button>}
+          <Button onClick={handleSubmit} variant="primary" className="text-xs px-3 py-1 flex items-center gap-1">
+            <Send size={12} /> {buttonLabel}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- POST COMPONENT ---
+interface ThreadItemProps {
+  thread: Comment;
+  onClick: () => void;
+  onVote: (id: string, val: number) => void;
+  onUserClick: (uid: string) => void;
+  onChat: (uid: string) => void;
+  currentUserId?: string;
+  onDelete?: (id: string) => void;
+  onShare: (thread: Comment) => void;
+}
+
+const ThreadItem: React.FC<ThreadItemProps> = ({
+  thread,
+  onClick,
+  onVote,
+  onUserClick,
+  onChat,
+  currentUserId,
+  onDelete,
+  onShare
+}) => {
+
+  const handleVote = (e: React.MouseEvent, val: number) => {
+    e.stopPropagation();
+    // If clicking the same vote, toggle it off (0). Otherwise set to new val.
+    const newVote = thread.userVote === val ? 0 : val;
+    onVote(thread.id, newVote);
+  };
+
+  const handleUserClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onUserClick(thread.authorId);
+  }
+
+  const handleChatClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onChat(thread.authorId);
+  }
+
+  const handleDeleteClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (onDelete) onDelete(thread.id);
+  }
+
+  const handleShareClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    onShare(thread);
+  }
+
+  const isMe = currentUserId === thread.authorId;
+
+  return (
+    <div
+      onClick={onClick}
+      className={`group border-b border-gray-100 p-5 md:p-6 transition-all duration-300 cursor-pointer flex gap-5 last:border-0 hover:bg-[#fafafa] relative bg-white`}
+    >
+      {/* Interaction Column: Votes */}
+      <div className="flex flex-col items-center gap-1.5 min-w-[36px] pt-1 shrink-0">
+        <button
+          onClick={(e) => handleVote(e, 1)}
+          className={`p-1.5 rounded-lg transition-all duration-200 active:scale-90 ${thread.userVote === 1 ? 'text-orange-600 bg-orange-50' : 'text-gray-300 hover:text-gray-600 hover:bg-gray-100'}`}
+        >
+          <ArrowBigUp size={22} strokeWidth={2.5} fill={thread.userVote === 1 ? "currentColor" : "none"} />
+        </button>
+
+        <span className={`text-xs font-black tracking-tight ${thread.userVote !== 0 ? (thread.userVote === 1 ? 'text-orange-600' : 'text-blue-600') : 'text-gray-400'}`}>
+          {thread.likes || 0}
+        </span>
+
+        <button
+          onClick={(e) => handleVote(e, -1)}
+          className={`p-1.5 rounded-lg transition-all duration-200 active:scale-90 ${thread.userVote === -1 ? 'text-blue-600 bg-blue-50' : 'text-gray-300 hover:text-gray-600 hover:bg-gray-100'}`}
+        >
+          <ArrowBigDown size={22} strokeWidth={2.5} fill={thread.userVote === -1 ? "currentColor" : "none"} />
+        </button>
+      </div>
+
+      {/* Content Column */}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <div
+              onClick={handleUserClick}
+              className="w-6 h-6 rounded-full bg-black flex items-center justify-center text-[10px] text-white font-bold shrink-0 overflow-hidden shadow-sm hover:ring-2 hover:ring-black/5 transition-all"
+            >
+              {thread.authorPhoto ? <img src={thread.authorPhoto} className="w-full h-full object-cover" /> : thread.authorName[0]}
+            </div>
+            <button
+              onClick={handleUserClick}
+              className={`text-[11px] font-black tracking-wide hover:underline transition-colors flex items-center gap-1 text-gray-900`}
+            >
+              #{thread.authorName}
+            </button>
+            {thread.spaceHandle && (
+              <>
+                <span className="text-[10px] text-gray-300 mt-0.5">•</span>
+                <span className="text-[10px] font-black text-blue-600 mt-0.5 lowercase tracking-tight">{thread.spaceHandle}</span>
+              </>
+            )}
+            <span className="text-[10px] text-gray-400 mt-0.5">•</span>
+            <span className="text-[10px] text-gray-400 mt-0.5 font-medium">{formatDate(thread.createdAt)}</span>
+          </div>
+
+          <div className="flex items-center gap-1">
+            {isMe && onDelete && (
+              <button
+                onClick={handleDeleteClick}
+                className="text-gray-300 hover:text-red-500 hover:bg-red-50 p-1.5 rounded-full transition-all active:scale-90"
+                title="Delete Post"
+              >
+                <Trash2 size={14} />
+              </button>
+            )}
+          </div>
+        </div>
+
+        {thread.title && <h3 className="font-extrabold text-lg text-gray-900 mb-1.5 leading-snug tracking-tight">{thread.title}</h3>}
+        <p className={`text-[15px] text-gray-700 leading-relaxed font-medium whitespace-pre-wrap ${thread.title ? 'line-clamp-4' : ''}`}>
+          {thread.text}
+        </p>
+
+        {/* Media Preview (Enhanced) */}
+        {thread.mediaUrl && (
+          <div className="mt-4 mb-3 rounded-2xl overflow-hidden border border-gray-100 bg-black/5 shadow-inner group/media relative max-w-2xl">
+            {thread.mediaType === 'video' ? (
+              <video
+                src={thread.mediaUrl}
+                controls
+                className="w-full max-h-[500px] object-contain mx-auto"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+              <img
+                src={thread.mediaUrl}
+                alt="attachment"
+                className="w-full max-h-[500px] object-contain mx-auto transition-transform duration-700 group-hover/media:scale-[1.02]"
+              />
+            )}
+          </div>
+        )}
+
+        {/* Action Bar */}
+        <div className="flex items-center gap-5 mt-4">
+          <button className="flex items-center gap-1.5 text-xs font-bold text-gray-400 hover:text-black transition-colors py-1 px-1 rounded-md">
+            <MessageSquare size={14} strokeWidth={2.5} />
+            {thread.children.length} {thread.children.length === 1 ? 'Comment' : 'Comments'}
+          </button>
+
+          <button
+            onClick={handleShareClick}
+            className="flex items-center gap-1.5 text-xs font-bold text-gray-400 hover:text-black transition-colors py-1 px-1 rounded-md"
+          >
+            <Share2 size={14} strokeWidth={2.5} /> Share
+          </button>
+
+          {!isMe && (
+            <button
+              onClick={handleChatClick}
+              className="flex items-center gap-1.5 text-xs font-bold text-gray-400 hover:text-blue-600 transition-colors py-1 px-1 rounded-md ml-auto"
+            >
+              <MessageCircle size={14} strokeWidth={2.5} /> Message
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+interface CommentNodeProps {
+  c: Comment;
+  onReply: (text: string, parentId: string) => void;
+  onUserClick: (id: string) => void;
+  canPost: boolean;
+}
+
+const CommentNode: React.FC<CommentNodeProps> = ({ c, onReply, onUserClick, canPost }) => {
+  const [isReplying, setIsReplying] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  if (isCollapsed) {
+    return (
+      <div className="mt-3 ml-2 pl-4 py-1 border-l-2 border-gray-100 transition-all hover:border-gray-200">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setIsCollapsed(false)}
+            className="w-6 h-6 rounded-full bg-gray-50 flex items-center justify-center text-gray-400 hover:text-black hover:bg-gray-100 transition-all"
+          >
+            <Plus size={12} strokeWidth={3} />
+          </button>
+          <button onClick={() => onUserClick(c.authorId)} className={`text-[11px] font-bold opacity-60 flex items-center gap-1 text-gray-900`}>
+            #{c.authorName}
+          </button>
+          <span className="text-[10px] text-gray-300 font-medium">Collapsed thread ({c.children.length + 1} items)</span>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-5 ml-2 md:ml-4 pl-4 border-l-2 border-gray-100 relative group/cmt hover:border-black/10 transition-colors">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          <div
+            onClick={() => onUserClick(c.authorId)}
+            className="w-5 h-5 rounded-full bg-black flex items-center justify-center text-[8px] text-white font-bold shrink-0 shadow-sm transition-transform hover:scale-110"
+          >
+            {c.authorPhoto ? <img src={c.authorPhoto} className="w-full h-full object-cover rounded-full" /> : c.authorName[0]}
+          </div>
+          <button onClick={() => onUserClick(c.authorId)} className={`text-[11px] font-black tracking-tight hover:underline flex items-center gap-1 text-gray-900`}>
+            #{c.authorName}
+          </button>
+          <span className="text-[10px] text-gray-400">•</span>
+          <span className="text-[10px] text-gray-400 font-medium">{formatDate(c.createdAt)}</span>
+        </div>
+
+        <button
+          onClick={() => setIsCollapsed(true)}
+          className="opacity-0 group-hover/cmt:opacity-100 p-1 text-gray-300 hover:text-black transition-all"
+          title="Collapse"
+        >
+          <Minimize2 size={12} strokeWidth={3} />
+        </button>
+      </div>
+
+      <p className="text-[14px] text-gray-700 leading-relaxed font-medium mb-3 whitespace-pre-wrap">{c.text}</p>
+
+      <div className="flex gap-4 items-center">
+        {canPost && (
+          <button
+            onClick={() => setIsReplying(!isReplying)}
+            className={`text-[10px] font-black tracking-wider transition-all px-2 py-1 rounded-md hover:bg-gray-100 ${isReplying ? 'text-black bg-gray-100' : 'text-gray-400'}`}
+          >
+            {isReplying ? 'CANCEL' : 'REPLY'}
+          </button>
+        )}
+      </div>
+
+      {isReplying && (
+        <div className="mt-3 animate-slide-up">
+          <InlineInput
+            onSubmit={(text) => { onReply(text, c.id); setIsReplying(false); }}
+            onCancel={() => setIsReplying(false)}
+            autoFocus
+            placeholder={`Replying to ${c.authorName}...`}
+          />
+        </div>
+      )}
+
+      <div className="space-y-1">
+        {c.children.map(child => (
+          <CommentNode
+            key={child.id}
+            c={child}
+            onReply={onReply}
+            onUserClick={onUserClick}
+            canPost={canPost}
+          />
+        ))}
+      </div>
+    </div>
+  );
+};
+
+// --- PROFILE MODAL (Generic for Self and Others) ---
+export const UserProfileModal = ({
+  currentUser,
+  targetUserId,
+  thoughts,
+  isOpen,
+  onClose,
+  onLogout,
+  onNavigate,
+  onChat,
+  onDeletePost,
+  onOpenThread
+}: {
+  currentUser: UserProfile | null,
+  targetUserId: string | null,
+  thoughts: Comment[],
+  isOpen: boolean,
+  onClose: () => void,
+  onLogout?: () => void,
+  onNavigate: (uid: string) => void,
+  onChat: (uid: string) => void,
+  onDeletePost: (id: string) => void,
+  onOpenThread: (id: string) => void
+}) => {
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState('overview');
+
+  // Edit State
+  const [isEditing, setIsEditing] = useState(false);
+  const [editBio, setEditBio] = useState('');
+  const [editPhoto, setEditPhoto] = useState('');
+  const [editFullName, setEditFullName] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Network (Followers/Following) State
+  const [networkList, setNetworkList] = useState<UserProfile[]>([]);
+  const [networkType, setNetworkType] = useState<'followers' | 'following' | 'friends' | null>(null);
+
+  // Determine if viewing own profile
+  const isOwnProfile = currentUser && targetUserId === currentUser.uid;
+
+  useEffect(() => {
+    const fetchProfileData = async () => {
+      if (!targetUserId) return;
+
+      // Only show spinner if we don't have this profile yet or it's a new target
+      if (!profile || profile.uid !== targetUserId) {
+        setLoading(true);
+      }
+
+      setNetworkType(null); // Reset network view on profile change
+
+      // If viewing self, use current user data initially
+      if (currentUser && targetUserId === currentUser.uid) {
+        setProfile({ ...currentUser }); // Copy to allow local mutation checks
+        setEditBio(currentUser.bio || "Just another creative soul wandering the digital garden.");
+        setEditPhoto(currentUser.photoURL || "");
+        setEditFullName(currentUser.fullName || currentUser.displayName);
+
+        // Fetch stats specifically
+        const fullProfile = await getPublicUserProfile(targetUserId, currentUser.uid);
+        if (fullProfile) setProfile(fullProfile); // Update with stats
+
+        setLoading(false);
+        return;
+      }
+
+      // Fetch other user
+      const data = await getPublicUserProfile(targetUserId, currentUser?.uid);
+      setProfile(data);
+      setLoading(false);
+    };
+
+    if (isOpen) {
+      // Check if we already have the profile for this target to prevent flicker
+      if (!profile || profile.uid !== targetUserId) {
+        fetchProfileData();
+      } else {
+        // If profile exists but we just opened it, maybe refresh stats silently
+        fetchProfileData();
+      }
+    }
+  }, [isOpen, targetUserId, currentUser?.uid]);
+
+  const handleSaveProfile = async () => {
+    try {
+      await updateUserProfile(editPhoto, editBio, editFullName);
+      setIsEditing(false);
+      // Refresh local profile state
+      setProfile(prev => prev ? ({ ...prev, photoURL: editPhoto, bio: editBio, fullName: editFullName }) : null);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to update profile");
+    }
+  };
+
+  const handleFriendAction = async () => {
+    if (!currentUser || !profile) return;
+    try {
+      if (profile.friendStatus === 'friends') {
+        if (!window.confirm(`Are you absolutely sure you want to remove #${profile.displayName} from your friends?`)) return;
+        await unfriend(currentUser.uid, profile.uid);
+        setProfile({
+          ...profile,
+          friendStatus: 'none',
+          friendCount: (profile.friendCount || 0) - 1
+        });
+      } else if (profile.friendStatus === 'pending_sent') {
+        await unfriend(currentUser.uid, profile.uid); // Also works to cancel
+        setProfile({ ...profile, friendStatus: 'none' });
+      } else if (profile.friendStatus === 'pending_received') {
+        await acceptFriendRequest(currentUser.uid, profile.uid);
+        setProfile({
+          ...profile,
+          friendStatus: 'friends',
+          friendCount: (profile.friendCount || 0) + 1
+        });
+      } else {
+        await sendFriendRequest(currentUser.uid, profile.uid);
+        setProfile({ ...profile, friendStatus: 'pending_sent' });
+      }
+    } catch (e: any) {
+      console.error("Friend action error:", e);
+      alert(`Error: ${e.message || 'Failed to perform friend action. Please check the console for details.'}`);
+    }
+  };
+
+  const handleDeletePost = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm("Are you sure you want to delete this post?")) {
+      onDeletePost(id);
+    }
+  };
+
+  const handleViewNetwork = async (type: 'followers' | 'following' | 'friends') => {
+    if (!profile) return;
+    setNetworkType(type);
+    setNetworkList([]); // Clear previous
+    const list = await fetchUserNetwork(profile.uid, type);
+    setNetworkList(list);
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          const MAX_SIZE = 120;
+          let width = img.width;
+          let height = img.height;
+
+          if (width > height) {
+            if (width > MAX_SIZE) { height *= MAX_SIZE / width; width = MAX_SIZE; }
+          } else {
+            if (height > MAX_SIZE) { width *= MAX_SIZE / height; height = MAX_SIZE; }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          ctx?.drawImage(img, 0, 0, width, height);
+          setEditPhoto(canvas.toDataURL('image/jpeg', 0.7));
+        };
+        img.src = event.target?.result as string;
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={loading ? "Loading..." : `User: #${profile?.displayName}`}>
+      {!profile || loading ? (
+        <div className="h-[300px] flex items-center justify-center">
+          <div className="animate-spin w-8 h-8 border-2 border-black border-t-transparent rounded-full"></div>
+        </div>
+      ) : (
+        <div className="flex flex-col h-[60vh]">
+          {networkType ? (
+            // --- NETWORK VIEW (Followers/Following List) ---
+            <div className="flex flex-col h-full bg-white">
+              <div className="p-2 border-b border-black flex items-center gap-2 bg-gray-50">
+                <Button onClick={() => setNetworkType(null)} className="px-2 py-1"><ChevronLeft size={14} /></Button>
+                <span className="font-bold text-sm uppercase">{networkType}</span>
+              </div>
+              <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                {networkList.length > 0 ? networkList.map(u => (
+                  <div key={u.uid} onClick={() => onNavigate(u.uid)} className="flex items-center gap-3 p-3 border border-gray-200 hover:bg-gray-50 cursor-pointer">
+                    <div className="w-10 h-10 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold">
+                      {u.photoURL ? <img src={u.photoURL} alt="avi" className="w-full h-full object-cover" /> : u.displayName[0]}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="font-bold text-sm">{u.fullName || u.displayName}</div>
+                      <div className="text-xs text-gray-500">#{u.displayName}</div>
+                    </div>
+                    {isOwnProfile && (
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (window.confirm(`Remove #${u.displayName} from your ${networkType}?`)) {
+                            await unfriend(currentUser.uid, u.uid);
+                            setNetworkList(prev => prev.filter(item => item.uid !== u.uid));
+                          }
+                        }}
+                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </div>
+                )) : (
+                  <div className="p-4 text-center text-gray-400 italic">No users found.</div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* --- MAIN PROFILE VIEW --- */}
+              {/* Header */}
+              <div className="flex items-center gap-4 p-4 border-b border-black bg-gray-50">
+                <div className="relative">
+                  <div className="w-20 h-20 bg-black text-white rounded-full flex items-center justify-center text-3xl font-bold border-2 border-white shadow-md overflow-hidden relative group">
+                    {(isEditing ? editPhoto : profile.photoURL) ? (
+                      <img src={isEditing ? editPhoto : profile.photoURL} alt="avi" className="w-full h-full object-cover" />
+                    ) : (
+                      profile.displayName ? profile.displayName[0] : '?'
+                    )}
+                    {isEditing && (
+                      <div
+                        onClick={() => fileInputRef.current?.click()}
+                        className="absolute inset-0 bg-black/50 flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <Camera size={20} className="text-white" />
+                      </div>
+                    )}
+                  </div>
+                  <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleImageUpload} />
+                </div>
+
+                <div className="flex-1">
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <h2 className="text-2xl font-bold font-serif">{profile.fullName || profile.displayName}</h2>
+                      <div className="text-xs text-gray-500 font-mono mb-2 flex items-center gap-1">
+                        #{profile.displayName}
+                      </div>
+                    </div>
+
+                    {isOwnProfile ? (
+                      !isEditing ? (
+                        <Button onClick={() => setIsEditing(true)} className="flex items-center gap-1 px-2 py-1">
+                          <Edit2 size={12} /> Edit Profile
+                        </Button>
+                      ) : (
+                        <div className="flex gap-2">
+                          <Button onClick={() => setIsEditing(false)}>Cancel</Button>
+                          <Button onClick={handleSaveProfile} variant="primary">Save</Button>
+                        </div>
+                      )
+                    ) : (
+                      <div className="flex gap-2">
+                        <Button
+                          onClick={() => onChat(profile.uid)}
+                          className="flex items-center gap-2"
+                        // Allow chat even if not logged in (will trigger login)
+                        >
+                          <MessageCircle size={14} /> Message
+                        </Button>
+                        <Button
+                          onClick={handleFriendAction}
+                          variant={profile.friendStatus === 'friends' ? 'default' : 'primary'}
+                          className="flex items-center gap-2"
+                          disabled={!currentUser}
+                        >
+                          {profile.friendStatus === 'friends' && <><Trash2 size={14} /> REMOVE FRIEND</>}
+                          {profile.friendStatus === 'pending_sent' && <><Loader size={12} className="animate-spin" /> SENT (PENDING)</>}
+                          {profile.friendStatus === 'pending_received' && <><Check size={14} /> Accept Request</>}
+                          {profile.friendStatus === 'none' && <><UserPlus size={14} /> Add Friend</>}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Stats Bar (Clickable) */}
+              <div className="grid grid-cols-2 border-b border-black text-center divide-x divide-gray-200">
+                <div className="p-2 bg-gray-50">
+                  <div className="font-bold">{thoughts.filter(t => t.authorId === profile.uid).length}</div>
+                  <div className="text-[10px] text-gray-500 uppercase">Posts</div>
+                </div>
+                <div className="p-2 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleViewNetwork('friends')}>
+                  <div className="font-bold">{profile.friendCount || 0}</div>
+                  <div className="text-[10px] text-gray-500 uppercase">Friends</div>
+                </div>
+              </div>
+
+              {/* Edit Inputs */}
+              {isEditing && (
+                <div className="p-4 bg-yellow-50 border-b border-black space-y-3 animate-fade-in">
+                  <div>
+                    <label className="text-[10px] font-bold uppercase block mb-1">Display Name</label>
+                    <Input value={editFullName} onChange={e => setEditFullName(e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-bold uppercase block mb-1">Bio</label>
+                    <Input value={editBio} onChange={e => setEditBio(e.target.value)} />
+                  </div>
+                </div>
+              )}
+
+              {/* Tabs */}
+              <div className="flex border-b border-black">
+                {['overview', 'posts', 'settings'].map(tab => {
+                  if (tab === 'settings' && !isOwnProfile) return null;
+                  return (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider hover:bg-gray-100 transition-colors ${activeTab === tab ? 'bg-black text-white hover:bg-black' : ''}`}
+                    >
+                      {tab}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Tab Content */}
+              <div className="flex-1 overflow-y-auto p-4 bg-white">
+                {activeTab === 'overview' && (
+                  <div className="space-y-4">
+                    <div className="bg-white border border-black p-4">
+                      <h3 className="font-bold text-sm mb-2">About</h3>
+                      <p className="text-sm text-gray-600 italic">"{profile.bio || "Just another creative soul wandering the digital garden."}"</p>
+                    </div>
+                  </div>
+                )}
+
+                {activeTab === 'posts' && (
+                  <div className="space-y-2">
+                    {thoughts.filter(t => t.authorId === profile.uid).map((p: Comment) => (
+                      <div
+                        key={p.id}
+                        onClick={() => onOpenThread(p.id)}
+                        className="p-3 border border-gray-200 hover:bg-gray-50 flex justify-between items-center group cursor-pointer"
+                      >
+                        <div className="flex-1">
+                          <div className="text-[10px] text-gray-400 mb-1">{new Date(p.createdAt?.toDate ? p.createdAt.toDate() : p.createdAt).toLocaleDateString()}</div>
+                          <div className="font-bold text-sm mb-1">{p.title || p.text.substring(0, 50) + '...'}</div>
+                          <div className="text-xs text-gray-500 flex items-center gap-1"><ArrowBigUp size={12} /> {p.likes}</div>
+                        </div>
+                        {isOwnProfile && (
+                          <button
+                            onClick={(e) => handleDeletePost(p.id, e)}
+                            className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
+                            title="Delete Post"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {activeTab === 'settings' && isOwnProfile && (
+                  <div className="space-y-6 max-w-sm mx-auto pt-4">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-gray-500 block mb-1">Username (Handle)</label>
+                      <div className="flex gap-2 items-center bg-gray-100 p-2 border border-gray-300">
+                        <User size={14} className="text-gray-400" />
+                        <span className="text-sm font-mono text-gray-600 flex-1">{profile.displayName}</span>
+                        <span className="text-[10px] text-red-500 font-bold border border-red-200 bg-red-50 px-1">LOCKED</span>
+                      </div>
+                    </div>
+                    <Button onClick={onLogout} className="w-full border-red-500 text-red-500 hover:bg-red-50 mt-8">
+                      <div className="flex items-center justify-center gap-2"><LogOut size={14} /> SIGN OUT</div>
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+};
+
+export const MindStream = ({
+  user,
+  onOpenLogin,
+  onLogout,
+  initialProfileId,
+  onClearInitialProfileId,
+  onToggleChat,
+  unreadCount = 0,
+  initialThreadId,
+  onClearInitialThreadId
+}: {
+  user: UserProfile | null,
+  onOpenLogin: () => void,
+  onLogout?: () => void,
+  initialProfileId?: string | null,
+  onClearInitialProfileId?: () => void,
+  onToggleChat?: () => void,
+  unreadCount?: number,
+  initialThreadId?: string | null,
+  onClearInitialThreadId?: () => void
+}) => {
+  const [thoughts, setThoughts] = useState<Comment[]>([]);
+  const canPost = !!user;
+  const [title, setTitle] = useState('');
+  const [text, setText] = useState('');
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [filePreview, setFilePreview] = useState<string | null>(null);
+  const [isPosting, setIsPosting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // View State: 'stream' | 'spaces' | 'blinks'
+  const [activeView, setActiveView] = useState<'stream' | 'spaces' | 'blinks'>('stream');
+  const [activeSpace, setActiveSpace] = useState<Space | null>(null);
+
+  // Use ID to track active thread so updates to 'thoughts' propagate immediately to the view
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId || null);
+  const activeThread = thoughts.find(t => t.id === activeThreadId) || null;
+
+  // Share Card State
+  const [shareCardThread, setShareCardThread] = useState<Comment | null>(null);
+  const shareCardRef = useRef<HTMLDivElement>(null);
+
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
+  const [isCreateReelOpen, setIsCreateReelOpen] = useState(false);
+  const [reelStep, setReelStep] = useState(1);
+  const [reelLocation, setReelLocation] = useState('');
+  const [reelTags, setReelTags] = useState('');
+  const [openedBlinkId, setOpenedBlinkId] = useState<string | null>(null);
+  const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
+  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
+  const [dashboardTab, setDashboardTab] = useState<'suggested' | 'mine' | 'following'>('suggested');
+  const [isMemberOfActiveSpace, setIsMemberOfActiveSpace] = useState(false);
+  const [userSpaceRole, setUserSpaceRole] = useState<'member' | 'admin' | 'owner' | null>(null);
+  const [userSpaceStatus, setUserSpaceStatus] = useState<'pending' | 'accepted' | 'blocked' | null>(null);
+
+  // Space Management State
+  const [isEditSpaceOpen, setIsEditSpaceOpen] = useState(false);
+  const [isMemberManageOpen, setIsMemberManageOpen] = useState(false);
+  const [pendingMembers, setPendingMembers] = useState<any[]>([]);
+  const avatarInputRef = useRef<HTMLInputElement>(null);
+  const bannerInputRef = useRef<HTMLInputElement>(null);
+  const [isUpdatingSpace, setIsUpdatingSpace] = useState(false);
+
+  const isSpaceAdmin = (userSpaceRole === 'admin' || userSpaceRole === 'owner') || (activeSpace && user && activeSpace.ownerId === user.uid);
+  const isSpaceOwner = userSpaceRole === 'owner' || (activeSpace && user && activeSpace.ownerId === user.uid);
+
+  // Fetch Member Status and Pending Requests
+  useEffect(() => {
+    if (activeSpace && user) {
+      fetchSpaceMembership(activeSpace.id, user.uid).then(status => {
+        if (status) {
+          setUserSpaceRole(status.role);
+          setUserSpaceStatus(status.status);
+          setIsMemberOfActiveSpace(status.status === 'accepted');
+        } else if (activeSpace.ownerId === user.uid) {
+          // Robust Owner Check: If I'm the owner but membership record is missing/delayed
+          setUserSpaceRole('owner');
+          setUserSpaceStatus('accepted');
+          setIsMemberOfActiveSpace(true);
+        } else {
+          setUserSpaceRole(null);
+          setUserSpaceStatus(null);
+          setIsMemberOfActiveSpace(false);
+        }
+      });
+      fetchSpaceMembers(activeSpace.id).then(setSpaceMembers);
+    } else if (activeSpace) {
+      fetchSpaceMembers(activeSpace.id).then(setSpaceMembers);
+      setUserSpaceRole(null);
+      setUserSpaceStatus(null);
+      setIsMemberOfActiveSpace(false);
+    }
+  }, [activeSpace, user]);
+
+  useEffect(() => {
+    if (activeSpace && isSpaceAdmin) {
+      fetchPendingMembers(activeSpace.id).then(setPendingMembers);
+    }
+  }, [activeSpace, isSpaceAdmin]);
+
+  useEffect(() => {
+    if (activeSpace) {
+      fetchSpaceMembers(activeSpace.id).then(setSpaceMembers);
+    }
+  }, [activeSpace]);
+  const [spaceMembers, setSpaceMembers] = useState<{ uid: string, name: string, photoURL?: string, role?: string }[]>([]);
+  const [spaces, setSpaces] = useState<Space[]>([]);
+  const [userSpaces, setUserSpaces] = useState<Space[]>([]);
+  const [isCreateSpaceOpen, setIsCreateSpaceOpen] = useState(false);
+
+  useEffect(() => {
+    fetchSpaces().then(setSpaces);
+  }, []);
+
+  useEffect(() => {
+    if (user?.uid) {
+      fetchUserSpaces(user.uid).then(setUserSpaces);
+    } else {
+      setUserSpaces([]);
+    }
+  }, [user?.uid]);
+
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [isNotifOpen, setIsNotifOpen] = useState(false);
+
+  useEffect(() => {
+    if (user?.uid) {
+      const unsub = subscribeToNotifications(user.uid, setNotifications);
+
+      // Fallback polling every 10 seconds to ensure consistency
+      const interval = setInterval(() => {
+        if (user.uid) {
+          fetchNotifications(user.uid, setNotifications);
+        }
+      }, 10000);
+
+      return () => {
+        unsub();
+        clearInterval(interval);
+      };
+    }
+  }, [user?.uid]);
+
+  const unreadNotifsCount = notifications.filter(n => !n.isRead).length;
+
+  const [newSpaceType, setNewSpaceType] = useState<'group' | 'page'>('group');
+  const [newSpaceName, setNewSpaceName] = useState('');
+  const [newSpaceHandle, setNewSpaceHandle] = useState('');
+  const [newSpaceDesc, setNewSpaceDesc] = useState('');
+  const [isCreatingSpace, setIsCreatingSpace] = useState(false);
+
+  // Profile Modal State
+  const [profileTargetId, setProfileTargetId] = useState<string | null>(initialProfileId || null);
+
+  // Mobile Sidebar Toggle
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  // Update profile target if prop changes (for external triggers like creator widget)
+  useEffect(() => {
+    if (initialProfileId) {
+      setProfileTargetId(initialProfileId);
+      // Clear the prop in parent so it doesn't reopen unwantedly on remount
+      if (onClearInitialProfileId) {
+        // Small timeout to ensure state is set before clearing
+        setTimeout(onClearInitialProfileId, 100);
+      }
+    }
+  }, [initialProfileId]);
+
+  // Update active thread if prop changes (Deep Linking)
+  useEffect(() => {
+    if (initialThreadId) {
+      setActiveThreadId(initialThreadId);
+      if (onClearInitialThreadId) {
+        setTimeout(onClearInitialThreadId, 100);
+      }
+    }
+  }, [initialThreadId]); // Restored closing bracket and dependency array
+
+  // Consolidating redundant membership effects
+  // Removed old fetchIsMember call here to avoid double-fetching and conflicts
+
+  // Search State
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchFilter, setSearchFilter] = useState<'all' | 'user' | 'group' | 'page'>('all');
+
+  // Debounced global search
+  useEffect(() => {
+    if (!searchQuery || searchQuery.trim().length < 2) {
+      setSearchResults([]);
+      return;
+    }
+
+    setIsSearching(true);
+    const timer = setTimeout(async () => {
+      const results = await globalSearch(searchQuery);
+      setSearchResults(results);
+      setIsSearching(false);
+    }, 300); // 300ms debounce
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  // Filtered search results based on active filter
+  const filteredSearchResults = searchFilter === 'all'
+    ? searchResults
+    : searchResults.filter(r => r.type === searchFilter);
+
+  // New Post Form (Top Level)
+  useEffect(() => {
+    const unsub = subscribeToFeed(setThoughts, user?.uid);
+    return () => unsub();
+  }, [user]);
+
+  // Handle file selection
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      // Basic size validation (e.g., 50MB)
+      if (file.size > 50 * 1024 * 1024) {
+        alert("File too large. Max size 50MB.");
+        return;
+      }
+      setSelectedFile(file);
+      setFilePreview(URL.createObjectURL(file));
+    }
+  };
+
+  const clearFile = () => {
+    setSelectedFile(null);
+    setFilePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Handle creating a NEW thread
+  const handlePost = async () => {
+    if (!user || (!text && !selectedFile)) return;
+    setIsPosting(true);
+    try {
+      // If we are in a space, associate the post with it
+      await postThought(text, user, null, title, selectedFile || undefined, activeSpace?.id);
+      setText('');
+      setTitle('');
+      clearFile();
+      setIsCreateOpen(false);
+    } catch (e: any) {
+      alert(`Failed to post: ${e.message}`);
+    } finally {
+      setIsPosting(false);
+    }
+  };
+
+  const handlePostReel = async () => {
+    if (!user || !selectedFile) return;
+    setIsPosting(true);
+    try {
+      const tags = reelTags.split(/[,\s]+/).map(t => t.startsWith('#') ? t : `#${t}`).filter(t => t.length > 1);
+      await postThought(text, user, null, title, selectedFile, undefined, reelLocation, tags);
+      setText('');
+      setTitle('');
+      setReelLocation('');
+      setReelTags('');
+      clearFile();
+      setIsCreateReelOpen(false);
+      setReelStep(1);
+    } catch (e: any) {
+      alert(`Failed to post reel: ${e.message}`);
+    } finally {
+      setIsPosting(false);
+    }
+  };
+
+  const handleReelFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (!file.type.startsWith('video/')) {
+        alert("Please select a video file for the reel.");
+        return;
+      }
+      // Check duration
+      const video = document.createElement('video');
+      video.preload = 'metadata';
+      video.onloadedmetadata = () => {
+        window.URL.revokeObjectURL(video.src);
+        if (video.duration > 61) {
+          alert("Note: This video is longer than 60 seconds. Only the first 60 seconds will be featured in the collective feed.");
+        }
+        setSelectedFile(file);
+        setFilePreview(URL.createObjectURL(file));
+        setReelStep(2); // Auto proceed to next step
+      };
+      video.src = URL.createObjectURL(file);
+    }
+  };
+
+  const handleCreateSpace = async () => {
+    if (!user) return;
+    setIsCreatingSpace(true);
+    try {
+      const freshSpace = await createSpace({
+        name: newSpaceName,
+        handle: (newSpaceType === 'group' ? 'g/' : '@') + newSpaceHandle,
+        description: newSpaceDesc,
+        type: newSpaceType,
+        ownerId: user.uid,
+        isPrivate: false
+      });
+      if (freshSpace) {
+        setSpaces(prev => [freshSpace, ...prev]);
+        setUserSpaces(prev => [freshSpace, ...prev]); // Add to my clusters
+        setActiveSpace(freshSpace);
+        setActiveView('spaces');
+        setIsCreateSpaceOpen(false);
+        // Reset fields
+        setNewSpaceName('');
+        setNewSpaceHandle('');
+        setNewSpaceDesc('');
+        // Immediately set owner role locally
+        setUserSpaceRole('owner');
+        setUserSpaceStatus('accepted');
+        setIsMemberOfActiveSpace(true);
+        setSpaceMembers([{ uid: user.uid, name: user.displayName, photoURL: user.photoURL, role: 'owner' }]);
+      }
+    } catch (e) {
+      alert("Failed to create space. Handle might be taken.");
+    } finally {
+      setIsCreatingSpace(false);
+    }
+  };
+
+  // Handle deletion (Optimistic)
+  const handleDeleteThought = async (id: string) => {
+    if (!user) return;
+
+    // Optimistic Update: Immediately remove from local state
+    setThoughts(prev => prev.filter(t => t.id !== id));
+
+    // API Call
+    try {
+      await deletePost(id, user.uid);
+    } catch (e: any) {
+      console.error("Failed to delete post on server", e);
+      // Alert the user about the failure
+      alert(`Failed to delete post: ${e.message}`);
+      // Note: For a robust app we would revert the optimistic update here by re-fetching.
+      // Since we have real-time subscription, the next update might fix it or we can force reload,
+      // but often if it fails on server, it won't be deleted, so it will come back on next sync.
+    }
+  };
+
+  // Handle Share (Deep Linking)
+  const handleShare = async (thread: Comment) => {
+    // 1. Set thread to render the hidden card
+    setShareCardThread(thread);
+
+    // 2. Wait for render, then capture
+    setTimeout(async () => {
+      if (shareCardRef.current) {
+        try {
+          const blob = await toBlob(shareCardRef.current, { cacheBust: true, backgroundColor: '#fcfbf9' });
+          const url = `${window.location.origin}${window.location.pathname}?thread=${thread.id}`;
+
+          if (blob) {
+            const file = new File([blob], 'stream-thought.png', { type: 'image/png' });
+            const shareData = {
+              title: 'Stream Thought',
+              text: `"${thread.title || thread.text.substring(0, 30)}..." - by ${thread.authorName}\n${url}`,
+              files: [file],
+              url: url
+            };
+
+            // Check if can share files
+            if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
+              await navigator.share(shareData);
+            } else {
+              // Fallback for desktop/unsupported
+              await navigator.clipboard.writeText(url);
+              alert("Link copied! (Image sharing not supported on this device)");
+            }
+          }
+        } catch (err) {
+          console.error("Share gen error:", err);
+          const url = `${window.location.origin}${window.location.pathname}?thread=${thread.id}`;
+          await navigator.clipboard.writeText(url);
+          alert("Link copied!");
+        } finally {
+          setShareCardThread(null);
+        }
+      }
+    }, 100);
+  };
+
+  // Handle inline comments/replies
+  const handleInlinePost = async (text: string, parentId: string | null, file?: File) => {
+    if (!user) {
+      onOpenLogin();
+      return;
+    }
+    try {
+      await postThought(text, user, parentId, undefined, file);
+    } catch (e: any) {
+      alert(`Failed to reply: ${e.message}`);
+    }
+  };
+
+  const handleVote = async (postId: string, val: number) => {
+    if (!user) {
+      onOpenLogin();
+      return;
+    }
+    const post = thoughts.find(t => t.id === postId);
+    if (post) {
+      // RULE: In groups, only members can vote.
+      if (post.spaceId) {
+        const space = spaces.find(s => s.id === post.spaceId);
+        if (space && space.type === 'group') {
+          const isMember = await fetchIsMember(space.id, user.uid);
+          if (!isMember) {
+            alert("Only members of this group can vote on posts.");
+            return;
+          }
+        }
+      }
+      await votePost(postId, user.uid, val, post.likes || 0, post.userVote || 0);
+    }
+  };
+
+  // Chat Trigger
+  const handleChatTrigger = (targetUid: string) => {
+    if (!canPost) {
+      onOpenLogin();
+      return;
+    }
+    // Close modals that might be open
+    setProfileTargetId(null);
+    setActiveThreadId(null);
+
+    // Dispatch event for App.tsx to catch and open ChatWidget
+    const event = new CustomEvent('open-chat-with-user', { detail: { userId: targetUid } });
+    window.dispatchEvent(event);
+  };
+
+  const filteredThoughts = thoughts.filter(t => {
+    // We now allow space-related posts in the main stream if they are ranked highly enough by the feed algorithm
+    if (activeView === 'stream' && t.spaceId) {
+      // Optional: more logic here if we wanted to limit it, but for now we keep it global
+    }
+
+    if (!searchQuery) return true;
+    const q = searchQuery.toLowerCase().trim();
+
+    // Prefix Search Logic
+    if (q.startsWith('#')) {
+      // User search
+      const targetUser = q.slice(1);
+      return t.authorName.toLowerCase().includes(targetUser);
+    }
+    if (q.startsWith('@')) {
+      // Page/Space search
+      // Note: Threads don't currently have space info in this filter, but we search title/text as fallback
+      const targetPage = q.slice(1);
+      return (t.title && t.title.toLowerCase().includes(targetPage)) || t.text.toLowerCase().includes(targetPage);
+    }
+    if (q.startsWith('g/')) {
+      // Group search
+      const targetGroup = q.slice(2);
+      // For now, search content for group mentions or title
+      return (t.title && t.title.toLowerCase().includes(targetGroup)) || t.text.toLowerCase().includes(targetGroup);
+    }
+
+    // Default: search all
+    return (
+      (t.title && t.title.toLowerCase().includes(q)) ||
+      t.text.toLowerCase().includes(q) ||
+      t.authorName.toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <>
+      <div className="flex flex-col md:flex-row h-full relative flex-1 bg-[#fcfcfc]">
+        {/* --- SIDEBAR --- */}
+        <div className={`
+                absolute md:relative inset-0 z-40 md:z-auto bg-[#f8f9fa] md:border-r border-gray-100 flex flex-col shrink-0 transition-all duration-500 ease-in-out md:translate-x-0 w-full md:w-72
+                ${isSidebarOpen ? 'translate-x-0 shadow-2xl overflow-hidden' : '-translate-x-full'}
+              `}>
+          {/* Mobile Sidebar Close */}
+          <div className="md:hidden flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-white">
+            <div
+              className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
+              onClick={() => { setActiveView('stream'); setActiveSpace(null); setIsSidebarOpen(false); }}
+            >
+              <h2 className="font-serif font-black text-xl tracking-tight text-gray-900 leading-none">Stream</h2>
+              {canPost && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); setIsNotifOpen(true); }}
+                  className="relative p-2 text-gray-400 hover:text-black transition-colors"
+                >
+                  <Bell size={18} strokeWidth={2.5} />
+                  {unreadNotifsCount > 0 && (
+                    <div className="absolute top-1.5 right-1.5 w-3.5 h-3.5 bg-red-500 rounded-full border-2 border-white shadow-sm" />
+                  )}
+                </button>
+              )}
+            </div>
+            <button
+              onClick={() => setIsSidebarOpen(false)}
+              className="p-2 bg-gray-50 hover:bg-gray-100 rounded-full transition-all text-gray-500 hover:text-black"
+            >
+              <X size={20} strokeWidth={2.5} />
+            </button>
+          </div>
+
+          <div className="px-5 py-5 border-b border-gray-100 hidden md:flex items-center justify-between bg-white/50">
+            <div
+              className="cursor-pointer hover:opacity-80 transition-opacity"
+              onClick={() => { setActiveView('stream'); setActiveSpace(null); }}
+            >
+              <h2 className="font-serif text-xl font-black tracking-tight text-gray-900 leading-none">Stream</h2>
+              <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5 opacity-70">The living collective mind</p>
+            </div>
+            {canPost && (
+              <button
+                onClick={() => setIsNotifOpen(true)}
+                className="relative p-2 text-gray-400 hover:text-black transition-colors rounded-xl hover:bg-gray-50"
+              >
+                <Bell size={20} strokeWidth={2.5} />
+                {unreadNotifsCount > 0 && (
+                  <div className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center text-[9px] font-black border-2 border-white shadow-sm animate-pulse">
+                    {unreadNotifsCount}
+                  </div>
+                )}
+              </button>
+            )}
+          </div>
+
+          <div className="p-5 flex flex-col gap-5 overflow-y-auto h-full">
+            {/* Identity Section */}
+            <div>
+              <label className="text-[10px] font-black uppercase text-gray-400 mb-2 block tracking-widest">Your Identity</label>
+              {canPost ? (
+                <button
+                  onClick={() => { setProfileTargetId(user.uid); setIsSidebarOpen(false); }}
+                  className="w-full group flex items-center gap-3 p-3 rounded-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-black/5 transition-all duration-300 text-left relative overflow-hidden"
+                >
+                  <div className="absolute inset-0 bg-gradient-to-br from-gray-50/0 to-gray-50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+                  <div className="relative w-9 h-9 bg-black rounded-full overflow-hidden text-white flex items-center justify-center shrink-0 shadow-inner">
+                    {user?.photoURL ? <img src={user.photoURL} alt="avi" className="w-full h-full object-cover" /> : <User size={18} />}
+                  </div>
+                  <div className="relative min-w-0 flex-1">
+                    <div className="text-[12px] font-black text-gray-900 truncate tracking-tight">{user.fullName || user.displayName}</div>
+                    <div className="text-[10px] text-gray-500 font-medium truncate">#{user.displayName}</div>
+                  </div>
+                  <Settings size={14} className="relative text-gray-300 group-hover:text-black transition-colors" />
+                </button>
+              ) : (
+                <button
+                  onClick={onOpenLogin}
+                  className="w-full py-2.5 px-4 rounded-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:ring-2 hover:ring-black/5 transition-all text-left flex items-center justify-center gap-2 font-bold text-xs tracking-wide"
+                >
+                  <User size={14} strokeWidth={2.5} />
+                  LOGIN / JOIN
+                </button>
+              )}
+            </div>
+
+            {/* Actions Section */}
+            <div className="space-y-3">
+              <label className="text-[10px] font-black uppercase text-gray-400 mb-2 block tracking-widest">Interactions</label>
+
+              <button
+                onClick={() => { canPost ? setIsCreateOpen(true) : onOpenLogin(); setIsSidebarOpen(false); }}
+                className="w-full py-2.5 rounded-2xl bg-black text-white shadow-lg hover:shadow-xl hover:translate-y-[-1px] active:translate-y-[0] transition-all duration-300 flex items-center justify-center gap-2 font-black text-sm tracking-tight"
+              >
+                <Edit2 size={16} strokeWidth={2.5} />
+                POST THOUGHT
+              </button>
+
+              {/* Blinks Button */}
+              <button
+                onClick={() => { setActiveView('blinks'); setActiveSpace(null); setIsSidebarOpen(false); }}
+                className={`w-full py-2.5 rounded-2xl transition-all duration-300 flex items-center justify-center gap-2 font-black text-sm tracking-tight border ${activeView === 'blinks'
+                  ? 'bg-indigo-600 text-white border-indigo-700 shadow-lg'
+                  : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border-indigo-100/50'
+                  }`}
+              >
+                <PlaySquare size={16} strokeWidth={2.5} />
+                BLINKS
+              </button>
+
+              {onToggleChat && (
+                <div className="relative">
+                  <button
+                    onClick={() => { canPost ? onToggleChat() : onOpenLogin(); setIsSidebarOpen(false); }}
+                    className={`w-full py-2.5 rounded-2xl flex items-center justify-center gap-2 font-black text-sm tracking-tight transition-all duration-300 ${canPost ? 'bg-yellow-200 text-black hover:bg-yellow-300 shadow-sm' : 'bg-gray-100 text-gray-400 hover:bg-gray-200 opacity-80'}`}
+                  >
+                    <MessageCircle size={18} strokeWidth={2.5} />
+                    {canPost ? 'MESSAGES' : 'MESSAGES'}
+                  </button>
+                  {canPost && unreadCount > 0 && (
+                    <div className="absolute top-2 right-2 w-6 h-6 bg-red-500 text-white rounded-full flex items-center justify-center text-[10px] font-black border-2 border-white shadow-sm animate-bounce">
+                      {unreadCount}
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Notifications Button Removed as per User Request and moved to header icon */}
+            </div>
+
+            {/* Spaces Section */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="text-[10px] font-black uppercase text-gray-400 block tracking-widest">Spaces</label>
+                <button
+                  onClick={() => { canPost ? setIsCreateSpaceOpen(true) : onOpenLogin(); setIsSidebarOpen(false); }}
+                  className="px-2.5 py-1 rounded-lg bg-black text-white text-[9px] font-black uppercase tracking-tighter hover:bg-gray-800 transition-all shadow-sm active:scale-95 flex items-center gap-1"
+                >
+                  <Plus size={10} strokeWidth={4} /> CREATE
+                </button>
+              </div>
+              <div className="space-y-2">
+                {spaces.length > 0 ? spaces.slice(0, 3).map(space => (
+                  <button
+                    key={space.id}
+                    onClick={() => {
+                      setActiveView('spaces');
+                      setActiveSpace(space);
+                      setIsSidebarOpen(false);
+                    }}
+                    className="w-full group flex items-center gap-3 p-2.5 rounded-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-black/5 transition-all duration-300 text-left relative overflow-hidden"
+                  >
+                    <div className="absolute inset-0 bg-gradient-to-br from-gray-50/0 to-gray-50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+
+                    <div className="relative w-9 h-9 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-400 shrink-0 group-hover:bg-black group-hover:text-white group-hover:border-black transition-all duration-300">
+                      {space.type === 'group' ? <Users size={16} /> : <Layout size={16} />}
+                    </div>
+
+                    <div className="relative min-w-0 flex-1">
+                      <div className="text-[11px] font-black text-black truncate tracking-tight mb-0.5">{space.name}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[9px] text-gray-500 uppercase font-black tracking-wider">{space.handle}</span>
+                        <span className="text-[9px] text-gray-400">•</span>
+                        <span className="text-[9px] text-gray-600 font-bold whitespace-nowrap">
+                          {space.type === 'group' ? `${space.memberCount || 1} members` : `${space.followerCount || 1} followers`}
+                        </span>
+                      </div>
+                    </div>
+
+                    <ChevronLeft size={12} className="relative text-gray-300 rotate-180 group-hover:text-black transition-colors" />
+                  </button>
+                )) : (
+                  <div className="py-2 text-[10px] text-gray-400 italic">No spaces joined yet.</div>
+                )}
+
+                <button
+                  onClick={() => { setActiveView('spaces'); setActiveSpace(null); setIsSidebarOpen(false); }}
+                  className="w-full py-3 bg-white border border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-[10px] font-black text-black hover:bg-green-50 active:translate-x-[2px] active:translate-y-[2px] active:shadow-none tracking-[0.2em] uppercase transition-all flex items-center justify-center gap-2"
+                >
+                  <Compass size={14} strokeWidth={2.5} /> EXPLORE_NET
+                </button>
+              </div>
+            </div>
+
+            {/* Top Interests Section */}
+            <div className="space-y-3">
+              <label className="text-[10px] font-black uppercase text-gray-400 mb-2 block tracking-widest">Top Interests</label>
+              <div className="flex flex-wrap gap-2">
+                <span
+                  onClick={() => { setSearchQuery('Exploration'); setActiveView('stream'); setIsSidebarOpen(false); }}
+                  className="px-3 py-1.5 bg-white border border-gray-100 rounded-xl text-[10px] font-bold text-gray-600 hover:border-black cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm active:scale-95"
+                >
+                  <Compass size={12} className="text-blue-500" /> Exploration
+                </span>
+                <span
+                  onClick={() => { setSearchQuery('Digital Art'); setActiveView('stream'); setIsSidebarOpen(false); }}
+                  className="px-3 py-1.5 bg-white border border-gray-100 rounded-xl text-[10px] font-bold text-gray-600 hover:border-black cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm active:scale-95"
+                >
+                  <Heart size={12} className="text-red-500" /> Digital Art
+                </span>
+                <span
+                  onClick={() => { setSearchQuery('Startups'); setActiveView('stream'); setIsSidebarOpen(false); }}
+                  className="px-3 py-1.5 bg-white border border-gray-100 rounded-xl text-[10px] font-bold text-gray-600 hover:border-black cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm active:scale-95"
+                >
+                  <Activity size={12} className="text-green-500" /> Startups
+                </span>
+              </div>
+            </div>
+
+            {/* Empty space for mt-auto to push content up */}
+            <div className="mt-auto" />
+          </div>
+        </div>
+
+        {/* --- MAIN FEED --- */}
+        <div className="flex-1 flex flex-col overflow-hidden bg-white relative">
+          {/* Desktop Overlay: Floating Premium Search Pill (Top Right) */}
+          <div className={`hidden md:block absolute top-6 right-8 z-30 transition-all duration-500 ease-out ${isSearchExpanded ? 'w-72' : 'w-12'} pointer-events-none`}>
+            <div className="relative group pointer-events-auto">
+              <div
+                onClick={() => !isSearchExpanded && setIsSearchExpanded(true)}
+                className={`absolute inset-0 bg-white/70 backdrop-blur-xl rounded-full shadow-[0_8px_30px_rgb(0,0,0,0.04)] border border-black/10 transition-all duration-500 ease-out ${isSearchExpanded ? 'bg-white/90 border-black/20' : 'cursor-pointer hover:bg-white hover:scale-110'}`}
+              />
+              <div className="relative flex items-center h-12 overflow-hidden">
+                <Search
+                  className={`absolute left-4 text-gray-400 transition-all duration-300 ${isSearchExpanded ? 'text-black' : 'cursor-pointer'}`}
+                  size={16}
+                  strokeWidth={2.5}
+                  onClick={() => setIsSearchExpanded(!isSearchExpanded)}
+                />
+                <input
+                  placeholder="Search thoughts..."
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onFocus={() => setIsSearchExpanded(true)}
+                  className={`w-full bg-transparent border-none rounded-full py-3 pl-11 pr-10 text-sm font-medium focus:ring-0 placeholder-gray-400 focus:outline-none transition-opacity duration-300 ${isSearchExpanded ? 'opacity-100' : 'opacity-0'}`}
+                />
+                {isSearchExpanded && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); if (searchQuery) setSearchQuery(''); else setIsSearchExpanded(false); }}
+                    className="absolute right-4 p-1 hover:bg-black/5 rounded-full text-gray-400 hover:text-black transition-all"
+                  >
+                    {searchQuery ? <X size={14} strokeWidth={3} /> : <ChevronLeft size={14} strokeWidth={3} />}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Mobile Sleek Header Toolbar */}
+          <div className={`md:hidden flex items-center justify-between px-4 py-3 border-b border-gray-100 shrink-0 h-16 relative z-30 transition-all duration-300 ${searchQuery || isMobileSearchOpen ? 'bg-white' : 'bg-white/95 backdrop-blur-md'}`}>
+            {isMobileSearchOpen ? (
+              <div className="flex-1 flex items-center gap-3 animate-fade-in w-full">
+                <div className="relative flex-1 group">
+                  <div className="absolute inset-0 bg-gray-100 rounded-full transition-all group-focus-within:bg-gray-200/50" />
+                  <div className="relative flex items-center">
+                    <Search size={16} className="absolute left-3.5 text-gray-400 pointer-events-none" />
+                    <input
+                      autoFocus
+                      placeholder="Search..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="w-full bg-transparent border-none py-2.5 pl-10 pr-4 text-sm font-medium focus:ring-0 focus:outline-none placeholder-gray-500"
+                    />
+                  </div>
+                </div>
+                <button
+                  onClick={() => { setSearchQuery(''); setIsMobileSearchOpen(false); }}
+                  className="text-xs font-bold tracking-widest text-gray-400 active:text-black transition-colors px-2"
+                >
+                  CANCEL
+                </button>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-3">
+                  {activeView !== 'stream' ? (
+                    <button
+                      onClick={() => {
+                        if (activeSpace) setActiveSpace(null);
+                        else setActiveView('stream');
+                      }}
+                      className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-50 text-black border border-gray-100 shadow-sm active:scale-90 transition-all"
+                    >
+                      <ChevronLeft size={18} />
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setIsSidebarOpen(true)}
+                      className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-50 text-black border border-gray-100 shadow-sm active:scale-90 transition-all"
+                    >
+                      <Menu size={18} />
+                      {unreadCount > 0 && (
+                        <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white" />
+                      )}
+                    </button>
+                  )}
+                  <h1 className="font-serif font-black text-2xl tracking-tight text-gray-900 capitalize truncate max-w-[150px]">
+                    {activeSpace ? activeSpace.name : activeView}
+                  </h1>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setIsMobileSearchOpen(true)}
+                    className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-black active:scale-95 transition-all"
+                  >
+                    <Search size={22} strokeWidth={1.5} />
+                  </button>
+
+                  <button
+                    onClick={() => canPost ? setIsCreateOpen(true) : onOpenLogin()}
+                    className="w-10 h-10 flex items-center justify-center rounded-full bg-black text-white shadow-lg active:scale-90 transition-all"
+                  >
+                    <Edit2 size={18} />
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Global Search Results Dropdown */}
+          {searchQuery && searchQuery.trim().length >= 2 && (
+            <div className="border-b border-gray-200 bg-white">
+              <div className="px-4 py-3">
+                <div className="text-[10px] font-black uppercase text-gray-400 mb-3 tracking-widest flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Search size={12} />
+                    {isSearching ? 'Searching...' : `Results for "${searchQuery}"`}
+                  </div>
+                  {!isSearching && searchResults.length > 0 && (
+                    <span className="text-gray-300">({searchResults.length})</span>
+                  )}
+                </div>
+
+                {/* Filter Tabs */}
+                {!isSearching && searchResults.length > 0 && (
+                  <div className="flex gap-2 mb-3 overflow-x-auto pb-2">
+                    {[
+                      { key: 'all', label: 'All', count: searchResults.length },
+                      { key: 'user', label: 'Users', count: searchResults.filter(r => r.type === 'user').length },
+                      { key: 'group', label: 'Groups', count: searchResults.filter(r => r.type === 'group').length },
+                      { key: 'page', label: 'Pages', count: searchResults.filter(r => r.type === 'page').length }
+                    ].map(filter => (
+                      <button
+                        key={filter.key}
+                        onClick={() => setSearchFilter(filter.key as any)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all whitespace-nowrap ${searchFilter === filter.key
+                          ? 'bg-black text-white'
+                          : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                          }`}
+                      >
+                        {filter.label}
+                        {filter.count > 0 && (
+                          <span className={`ml-1.5 ${searchFilter === filter.key ? 'text-white/70' : 'text-gray-400'}`}>
+                            ({filter.count})
+                          </span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {isSearching ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader size={20} className="animate-spin text-gray-400" />
+                  </div>
+                ) : filteredSearchResults.length > 0 ? (
+                  <div className="space-y-1 max-h-96 overflow-y-auto">
+                    {filteredSearchResults.map((result) => (
+                      <button
+                        key={`${result.type}-${result.id}`}
+                        onClick={() => {
+                          if (result.type === 'user') {
+                            setProfileTargetId(result.id);
+                          } else {
+                            const found = spaces.find(s => s.id === result.id);
+                            if (found) {
+                              setActiveSpace(found);
+                              setActiveView('spaces');
+                            }
+                          }
+                          setSearchQuery('');
+                          setIsMobileSearchOpen(false);
+                          setIsSearchExpanded(false);
+                        }}
+                        className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 transition-all text-left group"
+                      >
+                        <div className="w-12 h-12 rounded-full bg-black overflow-hidden flex items-center justify-center text-white font-bold shrink-0">
+                          {result.photoURL ? (
+                            <img src={result.photoURL} alt={result.name} className="w-full h-full object-cover" />
+                          ) : (
+                            <span>{result.name[0]?.toUpperCase()}</span>
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-sm truncate group-hover:text-black transition-colors">
+                            {result.name}
+                          </div>
+                          {result.handle && (
+                            <div className="text-xs text-gray-500 truncate">
+                              {result.type === 'user' ? '#' : result.type === 'group' ? 'g/' : '@'}{result.handle}
+                            </div>
+                          )}
+                          {result.description && (
+                            <div className="text-xs text-gray-400 truncate mt-0.5">
+                              {result.description}
+                            </div>
+                          )}
+                        </div>
+                        <div className="shrink-0">
+                          <div className="px-2 py-1 rounded-md bg-gray-100 text-[9px] font-black uppercase tracking-wider text-gray-500">
+                            {result.type}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-center py-8 text-gray-400">
+                    <Search size={32} className="mx-auto mb-2 opacity-30" />
+                    <p className="text-sm font-medium">No results found</p>
+                    <p className="text-xs mt-1">Try searching for users, groups, or pages</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Added min-h-0 to ensure flex container allows scrolling inside this div */}
+          <div className="flex-1 overflow-y-auto relative min-h-0">
+            {/* STREAM VIEW */}
+            {activeView === 'stream' && (
+              <div className="divide-y divide-gray-200">
+                {filteredThoughts.length > 0 ? (
+                  filteredThoughts.map(t => (
+                    <ThreadItem
+                      key={t.id}
+                      thread={t}
+                      onClick={() => setActiveThreadId(t.id)}
+                      onVote={handleVote}
+                      onUserClick={(uid) => setProfileTargetId(uid)}
+                      onChat={handleChatTrigger}
+                      currentUserId={user?.uid}
+                      onDelete={(id) => {
+                        if (window.confirm("Are you sure you want to delete this post?")) {
+                          handleDeleteThought(id);
+                        }
+                      }}
+                      onShare={handleShare}
+                    />
+                  ))
+                ) : (
+                  <div className="p-12 text-center flex flex-col items-center justify-center h-full text-gray-400 gap-2">
+                    <Activity size={32} className="opacity-20" />
+                    <span className="font-mono text-sm">{searchQuery ? 'No matching thoughts.' : 'Stream is quiet. Be the first to post.'}</span>
+                  </div>
+                )}
+                {/* Bottom spacer for mobile nav */}
+                <div className="h-12 md:hidden"></div>
+              </div>
+            )}
+
+            {/* SPACES VIEW (Dashboard or Specific Space) */}
+            {activeView === 'spaces' && (
+              <div className="flex-1 h-full bg-[#f4f4f5] p-2 md:p-4 overflow-hidden flex flex-col">
+                <Window
+                  title={activeSpace ? `Space_Link: ${activeSpace.handle}` : 'Collective_Hub // Explorer'}
+                  color={THEME.green}
+                  className="h-full flex flex-col"
+                  noPadding
+                >
+                  <div className="flex-1 flex flex-col overflow-hidden bg-white">
+                    {activeSpace ? (
+                      /* --- SPACE DETAIL VIEW --- */
+                      <div className="flex-1 overflow-y-auto custom-scrollbar flex flex-col">
+                        {/* Improved Header with Banner/Wallpaper */}
+                        <div className="relative shrink-0 group/banner">
+                          {/* Banner Image / Gradient */}
+                          <div className="h-32 md:h-48 w-full bg-slate-900 relative overflow-hidden flex items-center justify-center">
+                            {activeSpace.bannerURL ? (
+                              <img src={activeSpace.bannerURL} className="w-full h-full object-cover" alt="banner" />
+                            ) : (
+                              <div className="opacity-10 flex border-black border-4">
+                                <Activity className="w-full h-full p-8 text-white" />
+                              </div>
+                            )}
+                            {/* Dark Overlay for Text Readability */}
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/30 to-transparent" />
+
+                            {isSpaceAdmin && (
+                              <button
+                                onClick={() => setIsEditSpaceOpen(true)}
+                                className="absolute top-4 right-4 bg-black/50 hover:bg-black/70 backdrop-blur-md text-white p-2.5 rounded-full border border-white/20 transition-all z-20"
+                                title="Edit Header"
+                              >
+                                <Camera size={18} />
+                              </button>
+                            )}
+                          </div>
+
+                          {/* Profile Overlay */}
+                          <div className="px-6 pb-6 pt-0 -mt-10 relative flex flex-col md:flex-row md:items-end gap-6 z-10">
+                            <div className="w-24 h-24 bg-black text-white border-4 border-white shadow-xl flex items-center justify-center text-4xl shrink-0 overflow-hidden">
+                              {activeSpace.avatarURL ? (
+                                <img src={activeSpace.avatarURL} className="w-full h-full object-cover" alt="avatar" />
+                              ) : (activeSpace.type === 'group' ? <Users size={40} /> : <Layout size={40} />)}
+                            </div>
+
+                            <div className="flex-1 pb-2">
+                              <div className="flex items-center gap-3 mb-1">
+                                <h2 className="text-3xl font-black tracking-tighter uppercase leading-none text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">{activeSpace.name}</h2>
+                                {activeSpace.isPrivate && <ShieldCheck size={20} className="text-yellow-400 drop-shadow-md" />}
+                              </div>
+                              <div className="flex flex-wrap items-center gap-2 mt-2">
+                                <span className="bg-white text-black px-2.5 py-1 text-[10px] font-black border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] uppercase tracking-widest">
+                                  {activeSpace.handle}
+                                </span>
+                                <span className="bg-yellow-400 text-black px-2.5 py-1 text-[10px] font-black border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] uppercase tracking-widest">
+                                  {activeSpace.type.toUpperCase()}
+                                </span>
+                                <button
+                                  onClick={() => setIsMemberManageOpen(true)}
+                                  className="bg-green-400 text-black px-2.5 py-1 text-[10px] font-black border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] uppercase tracking-widest hover:bg-green-300 hover:translate-x-[-1px] hover:translate-y-[-1px] hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all"
+                                >
+                                  {activeSpace.type === 'group' ? `${activeSpace.memberCount || spaceMembers.length || 1} members` : `${activeSpace.followerCount || spaceMembers.length || 1} followers`}
+                                </button>
+                              </div>
+                            </div>
+
+                            <div className="flex flex-wrap gap-3 pb-2">
+                              {isSpaceAdmin && (
+                                <>
+                                  <Button
+                                    onClick={() => setIsEditSpaceOpen(true)}
+                                    className="px-4 py-2 font-black text-[10px] tracking-widest bg-white border-black hover:bg-gray-100 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex items-center gap-2"
+                                  >
+                                    <Edit2 size={12} /> EDIT_SPACE
+                                  </Button>
+                                  <Button
+                                    onClick={() => setIsMemberManageOpen(true)}
+                                    className="px-4 py-2 font-black text-[10px] tracking-widest bg-yellow-400 border-black hover:bg-yellow-300 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                                  >
+                                    MANAGE_CLUSTER
+                                  </Button>
+                                </>
+                              )}
+                              <Button
+                                onClick={() => setActiveSpace(null)}
+                                className="px-4 py-2 font-black text-[10px] tracking-widest bg-white border-black hover:bg-gray-50 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                              >
+                                EXIT_HUB
+                              </Button>
+                              <Button
+                                variant={isMemberOfActiveSpace ? "default" : "primary"}
+                                className={`px-4 py-2 font-black text-[10px] tracking-widest shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${isMemberOfActiveSpace ? 'opacity-90' : ''}`}
+                                disabled={userSpaceStatus === 'pending'}
+                                onClick={async () => {
+                                  if (!user) { onOpenLogin(); return; }
+                                  if (isMemberOfActiveSpace) {
+                                    if (window.confirm(`Leave this space?`)) {
+                                      await leaveSpace(activeSpace.id, user.uid);
+                                      setIsMemberOfActiveSpace(false);
+                                      setUserSpaceStatus(null);
+                                      setUserSpaceRole(null);
+                                    }
+                                  } else {
+                                    await joinSpace(activeSpace.id, user.uid, activeSpace.isPrivate);
+                                    if (activeSpace.isPrivate) {
+                                      setUserSpaceStatus('pending');
+                                      alert("Request sent to admins!");
+                                    } else {
+                                      setIsMemberOfActiveSpace(true);
+                                      setUserSpaceStatus('accepted');
+                                      setUserSpaceRole('member');
+                                    }
+                                  }
+                                }}
+                              >
+                                {userSpaceStatus === 'pending'
+                                  ? 'REQUEST_PENDING...'
+                                  : (activeSpace.type === 'group'
+                                    ? (isMemberOfActiveSpace ? 'LEAVE_CLUSTER' : 'JOIN_CLUSTER')
+                                    : (isMemberOfActiveSpace ? 'UNFOLLOW' : 'FOLLOW_PAGE'))}
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 p-6 max-w-7xl mx-auto w-full">
+                          {/* Sub-feed Column */}
+                          <div className="lg:col-span-2 space-y-4">
+                            <div className="bg-gray-50 border-2 border-black p-4 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                              <button
+                                onClick={() => { if (!user) onOpenLogin(); else setIsCreateOpen(true); }}
+                                className="w-full text-left px-4 py-3 bg-white border border-black text-gray-400 text-xs font-black tracking-widest hover:bg-yellow-50 transition-all"
+                              >
+                                TX_BUFFER: Write to {activeSpace?.name}...
+                              </button>
+                            </div>
+                            <div className="divide-y divide-black bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] overflow-hidden">
+                              {thoughts.filter(t => t.spaceId === activeSpace?.id).length > 0 ? (
+                                thoughts.filter(t => t.spaceId === activeSpace?.id).map(t => (
+                                  <ThreadItem
+                                    key={t.id}
+                                    thread={t}
+                                    onClick={() => setActiveThreadId(t.id)}
+                                    onVote={handleVote}
+                                    onUserClick={(uid) => setProfileTargetId(uid)}
+                                    onChat={handleChatTrigger}
+                                    currentUserId={user?.uid}
+                                    onShare={handleShare}
+                                  />
+                                ))
+                              ) : (
+                                <div className="p-16 text-center text-gray-400">
+                                  <MessageSquare size={48} className="mx-auto mb-4 opacity-10" />
+                                  <p className="font-bold italic text-sm">Empty Space</p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Info Column */}
+                          <div className="space-y-6">
+                            <div className="bg-white border-2 border-black p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 mb-4 border-b border-gray-100 pb-2 flex items-center gap-2"><Info size={12} /> Registry // About</h3>
+                              <p className="text-xs text-black leading-relaxed font-bold font-mono">{activeSpace?.description || 'Secure communication channel for the space. Share, explore and connect.'}</p>
+                            </div>
+                            <div className="bg-white border-2 border-black p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 mb-4 border-b border-gray-100 pb-2 flex items-center gap-2"><Users size={12} /> Active_Nodes</h3>
+                              <div className="space-y-2">
+                                {spaceMembers.length > 0 ? spaceMembers.map(member => (
+                                  <button
+                                    key={member.uid}
+                                    onClick={() => setProfileTargetId(member.uid)}
+                                    className="flex items-center gap-3 w-full hover:bg-yellow-50 p-2 border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] bg-white transition-all group"
+                                  >
+                                    <div className="w-8 h-8 bg-black overflow-hidden flex items-center justify-center shrink-0 border-2 border-white ring-1 ring-black shadow-sm">
+                                      {member.photoURL ? <img src={member.photoURL} className="w-full h-full object-cover" alt="" /> : <User size={14} className="text-white" />}
+                                    </div>
+                                    <div className="flex-1 text-left min-w-0">
+                                      <div className="text-[10px] font-black truncate uppercase tracking-tight text-black">#{member.name}</div>
+                                      <div className="flex items-center gap-1.5 mt-0.5">
+                                        <div className="text-[7px] font-black bg-green-100 text-green-700 px-1 border border-green-200 uppercase tracking-widest">Active</div>
+                                        {member.role === 'owner' && <div className="text-[7px] font-black bg-yellow-400 text-black px-1 border border-black uppercase tracking-widest">Owner</div>}
+                                        {member.role === 'admin' && <div className="text-[7px] font-black bg-black text-white px-1 border border-black uppercase tracking-widest">Admin</div>}
+                                      </div>
+                                    </div>
+                                  </button>
+                                )) : (
+                                  <div className="text-center py-8 text-gray-400 text-[10px] font-black uppercase tracking-widest border-2 border-dashed border-gray-100 bg-gray-50/50">
+                                    Empty_Cluster
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* --- SPACES DASHBOARD --- */
+                      <div className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar">
+                        <div className="max-w-6xl mx-auto space-y-10">
+                          {/* Top Action / Title */}
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-8 border-b-2 border-black">
+                            <div>
+                              <h2 className="text-4xl font-black tracking-tighter mb-1 uppercase">Collective_Directory</h2>
+                              <p className="text-gray-400 font-bold text-xs uppercase tracking-[0.2em]">Explore and join community clusters</p>
+                            </div>
+                            <Button
+                              variant="primary"
+                              className="px-6 py-3 font-black text-xs tracking-[0.2em] transition-transform active:scale-95"
+                              onClick={() => canPost ? setIsCreateSpaceOpen(true) : onOpenLogin()}
+                            >
+                              <Plus size={16} strokeWidth={3} className="mr-2" /> NEW_DATA_SPACE
+                            </Button>
+                          </div>
+
+                          {/* Filter Tab System */}
+                          <div className="flex border-2 border-black bg-white overflow-hidden shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                            {[
+                              { id: 'suggested', label: 'Recommended' },
+                              { id: 'mine', label: 'My_Clusters' },
+                              { id: 'following', label: 'Subscribed' }
+                            ].map((tab) => (
+                              <button
+                                key={tab.id}
+                                onClick={() => setDashboardTab(tab.id as any)}
+                                className={`flex-1 py-4 text-[10px] font-black uppercase tracking-[0.2em] transition-all ${dashboardTab === tab.id ? 'bg-black text-white hover:bg-black' : 'bg-white text-gray-400 hover:text-black hover:bg-gray-50 border-r last:border-0 border-black'}`}
+                              >
+                                {tab.label}
+                              </button>
+                            ))}
+                          </div>
+
+                          {dashboardTab === 'suggested' && (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                              {/* Section: Suggested Groups */}
+                              <div className="space-y-6">
+                                <div className="flex items-center justify-between px-1">
+                                  <label className="text-[10px] font-black uppercase tracking-[0.25em] text-gray-400">Hub_Suggestions [Groups]</label>
+                                </div>
+                                <div className="space-y-4">
+                                  {spaces.filter(s => s.type === 'group').slice(0, 4).map(group => (
+                                    <div
+                                      key={group.id}
+                                      onClick={() => setActiveSpace(group)}
+                                      className="bg-white border-2 border-black p-4 flex items-center gap-5 hover:bg-green-50 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all cursor-pointer group"
+                                    >
+                                      <div className="w-14 h-14 bg-black text-white flex items-center justify-center shrink-0 border border-black shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)]">
+                                        <Users size={24} />
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="font-black text-lg text-gray-900 leading-tight mb-0.5 uppercase tracking-tighter truncate">{group.name}</div>
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">{group.handle}</span>
+                                          <span className="text-gray-200">•</span>
+                                          <span className="text-[9px] text-black font-black uppercase tracking-widest">{group.memberCount || 0} NODES</span>
+                                        </div>
+                                      </div>
+                                      <div className="w-10 h-10 border border-black flex items-center justify-center text-gray-300 group-hover:bg-black group-hover:text-white transition-all">
+                                        <Compass size={16} />
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Section: Suggested Pages */}
+                              <div className="space-y-6">
+                                <div className="flex items-center justify-between px-1">
+                                  <label className="text-[10px] font-black uppercase tracking-[0.25em] text-gray-400">CreatorHub_Featured [Pages]</label>
+                                </div>
+                                <div className="space-y-4">
+                                  {spaces.filter(s => s.type === 'page').slice(0, 4).map(page => (
+                                    <div
+                                      key={page.id}
+                                      onClick={() => setActiveSpace(page)}
+                                      className="bg-white border-2 border-black p-4 flex items-center gap-5 hover:bg-blue-50 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all cursor-pointer group"
+                                    >
+                                      <div className="w-14 h-14 bg-black text-white flex items-center justify-center shrink-0 border border-black shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)]">
+                                        <Layout size={24} />
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="font-black text-lg text-gray-900 leading-tight mb-0.5 uppercase tracking-tighter truncate">{page.name}</div>
+                                        <div className="flex items-center gap-2">
+                                          <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">{page.handle}</span>
+                                          <span className="text-gray-200">•</span>
+                                          <span className="text-[9px] text-black font-black uppercase tracking-widest">{page.followerCount || 0} FOLLOWERS</span>
+                                        </div>
+                                      </div>
+                                      <div className="w-10 h-10 border border-black flex items-center justify-center text-gray-300 group-hover:bg-black group-hover:text-white transition-all">
+                                        <Layout size={16} />
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+
+                          {dashboardTab === 'mine' && (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                              {userSpaces.length > 0 ? (
+                                userSpaces.map(space => (
+                                  <div
+                                    key={space.id}
+                                    onClick={() => setActiveSpace(space)}
+                                    className="bg-white border-2 border-black p-6 hover:bg-yellow-50 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[4px] hover:translate-y-[4px] transition-all cursor-pointer group flex flex-col items-center text-center"
+                                  >
+                                    <div className={`w-16 h-16 border-2 border-black flex items-center justify-center mb-4 group-hover:bg-black group-hover:text-white transition-colors ${space.type === 'group' ? 'bg-purple-50 text-purple-600' : 'bg-blue-50 text-blue-600'}`}>
+                                      {space.type === 'group' ? <Users size={28} /> : <Layout size={28} />}
+                                    </div>
+                                    <h3 className="font-black text-lg mb-1 uppercase tracking-tighter truncate w-full text-black">{space.name}</h3>
+                                    <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-6">{space.handle}</p>
+                                    <div className="mt-auto px-4 py-2 bg-black text-white text-[9px] font-black tracking-widest uppercase">
+                                      OPEN_LINK
+                                    </div>
+                                  </div>
+                                ))
+                              ) : (
+                                <div className="col-span-full py-16 bg-gray-50 border-2 border-dashed border-black flex flex-col items-center justify-center text-center">
+                                  <ShieldCheck size={40} strokeWidth={1} className="text-gray-200 mb-4" />
+                                  <p className="text-gray-400 font-black text-xs uppercase tracking-widest italic">No locally created instances found.</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {dashboardTab === 'following' && (
+                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                              <div className="col-span-full py-20 bg-white border-2 border-dashed border-black text-center">
+                                <p className="text-gray-400 font-black text-xs uppercase tracking-[0.2em]">No subscriptions active.</p>
+                                <button onClick={() => setDashboardTab('suggested')} className="mt-4 text-black font-black text-[10px] uppercase tracking-widest hover:underline">ACCESS DIRECTORY</button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Section: Sub-feed (Spaces Stream) */}
+                          <div className="space-y-6 pt-10 pb-20">
+                            <div className="flex items-center justify-between border-b-2 border-black pb-4">
+                              <div>
+                                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Signal_Monitor // Collective Feed</label>
+                                <p className="text-[11px] font-bold text-gray-500 uppercase">Live transmissions from your clusters</p>
+                              </div>
+                            </div>
+
+                            <div className="divide-y divide-black bg-white border-2 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] overflow-hidden">
+                              {thoughts.filter(t => t.spaceId).length > 0 ? (
+                                thoughts.filter(t => t.spaceId).slice(0, 10).map(t => (
+                                  <ThreadItem
+                                    key={t.id}
+                                    thread={t}
+                                    onClick={() => setActiveThreadId(t.id)}
+                                    onVote={handleVote}
+                                    onUserClick={(uid) => setProfileTargetId(uid)}
+                                    onChat={handleChatTrigger}
+                                    currentUserId={user?.uid}
+                                    onShare={handleShare}
+                                  />
+                                ))
+                              ) : (
+                                <div className="p-20 text-center text-gray-400">
+                                  <Activity size={48} className="mx-auto mb-6 opacity-10 animate-pulse" />
+                                  <div className="text-xl font-black text-gray-900 mb-2 uppercase tracking-tighter">Silent_Gardens</div>
+                                  <div className="text-[10px] font-bold text-gray-500 max-w-sm mx-auto leading-relaxed uppercase tracking-widest">Connect to nodes to receive data packets here.</div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </Window>
+              </div>
+            )}
+
+            {/* BLINKS VIEW */}
+            {activeView === 'blinks' && (
+              <div className="flex-1 h-full bg-[#f4f4f5] p-2 md:p-4 overflow-hidden flex flex-col">
+                <Window
+                  title="Flash_Stream // Blinks"
+                  color={THEME.accent}
+                  className="h-full flex flex-col"
+                  noPadding
+                >
+                  <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-white custom-scrollbar">
+                    <div className="max-w-5xl mx-auto">
+                      <div className="mb-12 text-center">
+                        <div className="inline-flex items-center justify-center w-24 h-24 bg-black border-2 border-black shadow-[8px_8px_0px_0px_rgba(209,184,214,1)] mb-8">
+                          <PlaySquare size={44} className="text-white" strokeWidth={2.5} />
+                        </div>
+                        <h2 className="text-5xl font-black mb-3 tracking-tighter uppercase">Flash_Blinks</h2>
+                        <p className="text-gray-400 text-xs font-black uppercase tracking-[0.3em] max-w-md mx-auto italic mb-8">Short stories // Shared memories // Infinite possibilities</p>
+                        <Button
+                          variant="primary"
+                          className="px-8 py-3 font-black text-xs tracking-[0.2em]"
+                          onClick={() => { if (!user) onOpenLogin(); else { setIsCreateReelOpen(true); setReelStep(1); } }}
+                        >
+                          <Plus size={16} className="mr-2" /> POST_NEW_REEL
+                        </Button>
+                      </div>
+
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-12">
+                        {thoughts.filter(t => t.mediaType === 'video').length > 0 ? (
+                          thoughts.filter(t => t.mediaType === 'video').map((blink) => (
+                            <div
+                              key={blink.id}
+                              onClick={() => setOpenedBlinkId(blink.id)}
+                              className="group relative aspect-[9/16] bg-black border-2 border-black overflow-hidden cursor-pointer shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all duration-300"
+                            >
+                              <video src={blink.mediaUrl} className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" />
+                              <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center group-hover:hidden">
+                                <PlaySquare size={32} className="text-white mb-4 drop-shadow-md" />
+                              </div>
+                              <div className="absolute bottom-0 left-0 right-0 p-4 bg-black/80 text-white translate-y-full group-hover:translate-y-0 transition-transform">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-6 h-6 bg-white shrink-0 border border-black overflow-hidden">
+                                    {blink.authorPhoto ? <img src={blink.authorPhoto} alt="" className="w-full h-full object-cover" /> : <User size={12} className="text-black ml-1 mt-1" />}
+                                  </div>
+                                  <div className="min-w-0">
+                                    <p className="text-[9px] font-black uppercase truncate">#{blink.authorName}</p>
+                                    <p className="text-[8px] font-medium opacity-70 uppercase tracking-tighter line-clamp-1">{blink.title || blink.text}</p>
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          [1, 2, 3, 4].map((i) => (
+                            <div
+                              key={i}
+                              className="group relative aspect-[9/16] bg-gray-50 border-2 border-black overflow-hidden cursor-pointer shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all duration-300 flex flex-col items-center justify-center opacity-30"
+                            >
+                              <PlaySquare size={32} className="text-black mb-2" />
+                              <p className="text-[8px] font-black uppercase tracking-widest">Waiting_for_Signal...</p>
+                            </div>
+                          ))
+                        )}
+                      </div>
+
+                    </div>
+                  </div>
+                </Window>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Create Modal (For New Threads Only) */}
+      <Modal isOpen={isCreateOpen} onClose={() => { if (!isPosting) setIsCreateOpen(false); }} title="Create Post">
+        <div className="space-y-4">
+          <Input placeholder="Title (Optional)" value={title} onChange={e => setTitle(e.target.value)} disabled={isPosting} />
+          <textarea
+            className="w-full h-32 bg-[#f4f4f5] border border-black p-2 text-sm focus:outline-none disabled:opacity-50"
+            placeholder="What's on your mind?"
+            value={text}
+            onChange={e => setText(e.target.value)}
+            autoFocus
+            disabled={isPosting}
+          />
+
+          {/* File Upload Section */}
+          <div className="flex items-center gap-2">
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept="image/*,video/mp4,video/webm"
+              onChange={handleFileSelect}
+              disabled={isPosting}
+            />
+            <Button onClick={() => {
+              fileInputRef.current?.click();
+            }} className="flex items-center gap-2" disabled={isPosting}>
+              <ImageIcon size={14} /> Add Photo / Video
+            </Button>
+            {selectedFile && (
+              <div className="flex items-center gap-2 text-xs bg-gray-100 px-2 py-1 rounded">
+                <Paperclip size={12} />
+                <span className="max-w-[150px] truncate">{selectedFile.name}</span>
+                <button onClick={clearFile} disabled={isPosting} className="hover:text-red-500"><X size={12} /></button>
+              </div>
+            )}
+          </div>
+
+          {/* Preview */}
+          {filePreview && (
+            <div className="relative border border-gray-300 rounded overflow-hidden max-h-40 bg-black flex justify-center">
+              {selectedFile?.type.startsWith('video') ? (
+                <video src={filePreview} controls className="h-full" />
+              ) : (
+                <img src={filePreview} alt="Preview" className="h-full object-contain" />
+              )}
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2 items-center">
+            {isPosting && <span className="text-xs text-gray-500 animate-pulse flex items-center gap-1"><Loader size={12} className="animate-spin" /> Uploading...</span>}
+            <Button onClick={() => { if (!isPosting) setIsCreateOpen(false); }} disabled={isPosting}>CANCEL</Button>
+            <Button onClick={handlePost} variant="primary" disabled={isPosting || (!text && !selectedFile)}>
+              {isPosting ? 'POSTING...' : 'POST'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Thread Detail Modal */}
+      <Modal isOpen={!!activeThread} onClose={() => setActiveThreadId(null)} title={activeThread?.title || 'Thread'}>
+        {activeThread && (
+          <div>
+            {/* Main Thread Content */}
+            <div className={`border border-black p-4 mb-4 bg-yellow-50`}>
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-8 h-8 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold text-xs shrink-0">
+                  {activeThread.authorPhoto ? (
+                    <img src={activeThread.authorPhoto} alt="avi" className="w-full h-full object-cover" />
+                  ) : (
+                    activeThread.authorName[0]
+                  )}
+                </div>
+                <div>
+                  <button onClick={() => setProfileTargetId(activeThread.authorId)} className="font-bold text-sm hover:underline">
+                    #{activeThread.authorName}
+                  </button>
+                  <div className="text-[10px] text-gray-500">{formatDate(activeThread.createdAt)}</div>
+                </div>
+              </div>
+              <h3 className="font-bold text-xl mb-2">{activeThread.title}</h3>
+              <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">{activeThread.text}</p>
+
+              {/* Full Media View */}
+              {activeThread.mediaUrl && (
+                <div className="mt-4 mb-2 w-full border border-gray-200 bg-black flex justify-center">
+                  {activeThread.mediaType === 'video' ? (
+                    <video
+                      src={activeThread.mediaUrl}
+                      controls
+                      className="w-full max-h-[600px] object-contain"
+                    />
+                  ) : (
+                    <img
+                      src={activeThread.mediaUrl}
+                      alt="attachment"
+                      className="w-full max-h-[600px] object-contain"
+                    />
+                  )}
+                </div>
+              )}
+
+              <div className="flex gap-4 mt-4 pt-4 border-t border-gray-300">
+                <div className="flex items-center gap-2">
+                  <button onClick={() => handleVote(activeThread.id, 1)} className={`p-1 ${activeThread.userVote === 1 ? 'text-orange-500' : 'text-gray-400'}`}><ArrowBigUp size={20} /></button>
+                  <span className="font-bold">{activeThread.likes}</span>
+                  <button onClick={() => handleVote(activeThread.id, -1)} className={`p-1 ${activeThread.userVote === -1 ? 'text-blue-500' : 'text-gray-400'}`}><ArrowBigDown size={20} /></button>
+                </div>
+
+                {/* Share Button (Functional) */}
+                <button
+                  onClick={() => handleShare(activeThread)}
+                  className="flex items-center gap-1 text-xs font-bold text-gray-500 hover:text-black hover:bg-gray-200 px-2 rounded transition-colors"
+                >
+                  <Share2 size={14} /> Share
+                </button>
+
+                {/* DM Button inside detail view */}
+                {user?.uid !== activeThread.authorId && (
+                  <button
+                    onClick={() => handleChatTrigger(activeThread.authorId)}
+                    className="flex items-center gap-1 text-xs font-bold text-gray-600 hover:text-blue-600 hover:bg-gray-200 px-2 rounded ml-auto transition-colors"
+                  >
+                    <MessageCircle size={14} /> Message Author
+                  </button>
+                )}
+
+                {/* Delete Option for Author */}
+                {user?.uid === activeThread.authorId && (
+                  <button
+                    onClick={() => {
+                      if (window.confirm("Delete this thread?")) {
+                        handleDeleteThought(activeThread.id);
+                        setActiveThreadId(null);
+                      }
+                    }}
+                    className="flex items-center gap-1 text-xs font-bold text-red-400 hover:text-red-600 hover:bg-red-50 px-2 rounded ml-2 transition-colors"
+                  >
+                    <Trash2 size={14} /> Delete Thread
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Main Comment Input Area */}
+            {canPost ? (
+              <div className="mb-8">
+                <InlineInput
+                  onSubmit={(text) => handleInlinePost(text, activeThread.id)}
+                  placeholder="Write a comment..."
+                  buttonLabel="Post Comment"
+                />
+              </div>
+            ) : (
+              <div className="mb-8 text-center bg-gray-50 p-4 border border-dashed border-gray-300">
+                <button onClick={() => { setActiveThreadId(null); onOpenLogin(); }} className="font-bold underline hover:text-blue-600">
+                  Join or Login
+                </button> to participate in the conversation.
+              </div>
+            )}
+
+            {/* Comments List */}
+            <div className="pl-2">
+              <div className="text-xs font-bold uppercase text-gray-400 mb-4 pb-2 border-b border-gray-200">
+                Comments ({activeThread.children.length})
+              </div>
+              {activeThread.children.map(c => (
+                <CommentNode
+                  key={c.id}
+                  c={c}
+                  onReply={handleInlinePost}
+                  onUserClick={(uid) => setProfileTargetId(uid)}
+                  canPost={canPost}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </Modal >
+
+      {/* Create Space Modal */}
+      < Modal isOpen={isCreateSpaceOpen} onClose={() => setIsCreateSpaceOpen(false)} title="Create New Space" >
+        <div className="space-y-4">
+          <div className="flex bg-gray-100 p-1 rounded-xl">
+            <button
+              onClick={() => setNewSpaceType('group')}
+              className={`flex-1 py-2 text-[10px] font-black rounded-lg transition-all tracking-widest ${newSpaceType === 'group' ? 'bg-white shadow-sm text-black' : 'text-gray-500'}`}
+            >
+              GROUP
+            </button>
+            <button
+              onClick={() => setNewSpaceType('page')}
+              className={`flex-1 py-2 text-[10px] font-black rounded-lg transition-all tracking-widest ${newSpaceType === 'page' ? 'bg-white shadow-sm text-black' : 'text-gray-500'}`}
+            >
+              PAGE
+            </button>
+          </div>
+
+          <div className="space-y-2 text-center pb-2 border-b border-gray-50">
+            <p className="text-[11px] text-gray-500 font-medium">
+              {newSpaceType === 'group'
+                ? "Groups are for collective discussion. Anyone can join and share."
+                : "Pages are for individual content creators. Others can follow your updates."}
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Space Name</label>
+            <Input
+              placeholder={newSpaceType === 'group' ? "e.g., Creative Coders" : "e.g., Daily Philosophy"}
+              value={newSpaceName}
+              onChange={e => setNewSpaceName(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Handle</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-black text-xs">
+                {newSpaceType === 'group' ? 'g/' : '@'}
+              </span>
+              <Input
+                className="pl-8"
+                placeholder="unique-handle"
+                value={newSpaceHandle}
+                onChange={e => setNewSpaceHandle(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Description</label>
+            <textarea
+              className="w-full h-24 bg-gray-50 border border-gray-100 rounded-2xl p-3 text-sm focus:outline-none focus:ring-4 focus:ring-black/5 transition-all outline-none"
+              placeholder="Tell everyone what this space is about..."
+              value={newSpaceDesc}
+              onChange={e => setNewSpaceDesc(e.target.value)}
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button onClick={() => setIsCreateSpaceOpen(false)}>CANCEL</Button>
+            <Button
+              onClick={handleCreateSpace}
+              variant="primary"
+              className="px-6"
+              disabled={!newSpaceName || !newSpaceHandle || isCreatingSpace}
+            >
+              {isCreatingSpace ? 'CREATING...' : 'CREATE SPACE'}
+            </Button>
+          </div>
+        </div>
+      </Modal >
+      <Modal
+        isOpen={isNotifOpen}
+        onClose={() => {
+          setIsNotifOpen(false);
+          // Mark all as read when closing
+          notifications.filter(n => !n.isRead).forEach(n => markNotificationRead(n.id));
+        }}
+        title="Notifications"
+      >
+        <div className="space-y-3 min-h-[300px]">
+          {notifications.length > 0 ? (
+            notifications.map(notif => (
+              <div
+                key={notif.id}
+                className={`p-4 rounded-2xl border transition-all flex items-center gap-3 ${notif.isRead ? 'bg-gray-50/50 border-gray-100 opacity-80' : 'bg-white border-black/5 shadow-sm'}`}
+              >
+                <div className="w-10 h-10 rounded-full bg-black overflow-hidden flex items-center justify-center shrink-0">
+                  {notif.fromPhoto ? <img src={notif.fromPhoto} className="w-full h-full object-cover" /> : <User size={20} className="text-white" />}
+                </div>
+
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs leading-tight">
+                    <span className="font-black">#{notif.fromName}</span>
+                    {notif.type === 'friend_request' ? ' sent you a friend request.' :
+                      notif.type === 'friend_accept' ? ' accepted your friend request!' :
+                        notif.type === 'vote_up' ? ' upvoted your thought.' :
+                          notif.type === 'vote_down' ? ' downvoted your thought.' :
+                            notif.type === 'message' ? ' sent you a direct signal.' :
+                              notif.type === 'reply' ? ' replied to your thought.' :
+                                notif.type === 'follow' ? ' started following you.' :
+                                  notif.type === 'group_join' ? ` joined your group "${notif.data?.name || 'Cluster'}".` :
+                                    ' interacted with you.'}
+                  </p>
+                  {notif.data?.text && (
+                    <p className="text-[10px] text-gray-400 italic mt-1 line-clamp-1 border-l-2 border-gray-200 pl-2">
+                      "{notif.data.text}"
+                    </p>
+                  )}
+                  <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-widest flex items-center gap-1">
+                    {notif.type === 'vote_up' && <ArrowBigUp size={10} className="text-orange-500" />}
+                    {notif.type === 'vote_down' && <ArrowBigDown size={10} className="text-blue-500" />}
+                    {notif.type === 'message' && <MessageSquare size={10} className="text-yellow-500" />}
+                    {notif.type === 'reply' && <MessageCircle size={10} className="text-green-500" />}
+                    {(notif.type === 'follow' || notif.type === 'friend_request' || notif.type === 'friend_accept') && <Users size={10} className="text-blue-400" />}
+                    {formatDate(notif.createdAt)}
+                  </p>
+                </div>
+
+                {notif.type === 'friend_request' && !notif.isRead && (
+                  <div className="flex gap-1.5 shrink-0">
+                    <button
+                      onClick={async () => {
+                        if (user?.uid) {
+                          await acceptFriendRequest(user.uid, notif.fromId);
+                          markNotificationRead(notif.id);
+                        }
+                      }}
+                      className="p-1 px-3 bg-black text-white rounded-lg text-[10px] font-black hover:bg-gray-800 transition-all"
+                    >
+                      ACCEPT
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (user?.uid) {
+                          await declineFriendRequest(user.uid, notif.fromId);
+                          markNotificationRead(notif.id);
+                        }
+                      }}
+                      className="p-1 px-3 bg-gray-100 text-gray-500 rounded-lg text-[10px] font-black hover:bg-gray-200 transition-all"
+                    >
+                      IGNORE
+                    </button>
+                  </div>
+                )}
+
+                {(notif.type === 'vote_up' || notif.type === 'vote_down' || notif.type === 'reply') && notif.data?.postId && (
+                  <button
+                    onClick={() => { setActiveThreadId(notif.data.postId); setIsNotifOpen(false); }}
+                    className="p-1 px-2 border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all rounded-md"
+                  >
+                    VIEW
+                  </button>
+                )}
+
+                {notif.type === 'group_join' && onToggleChat && (
+                  <button
+                    onClick={() => { onToggleChat(); setIsNotifOpen(false); }}
+                    className="p-1 px-2 border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all rounded-md"
+                  >
+                    VIEW GROUP
+                  </button>
+                )}
+
+                {(notif.type === 'follow' || notif.type === 'friend_accept') && (
+                  <button
+                    onClick={() => { setProfileTargetId(notif.fromId); setIsNotifOpen(false); }}
+                    className="p-1 px-2 border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all rounded-md"
+                  >
+                    PROFILE
+                  </button>
+                )}
+
+                {notif.type === 'message' && !notif.isRead && onToggleChat && (
+                  <button
+                    onClick={() => { onToggleChat(); setIsNotifOpen(false); }}
+                    className="p-1 px-2 bg-yellow-200 border border-black text-[9px] font-black uppercase hover:bg-yellow-300 transition-all rounded-md"
+                  >
+                    CHAT
+                  </button>
+                )}
+              </div>
+            ))
+          ) : (
+            <div className="flex flex-col items-center justify-center py-12 text-gray-300 gap-3">
+              <Bell size={40} strokeWidth={1} />
+              <p className="text-xs font-bold uppercase tracking-widest">No notifications yet</p>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* User Profile Modal (Generic) */}
+      <UserProfileModal
+        currentUser={user}
+        targetUserId={profileTargetId}
+        thoughts={thoughts}
+        isOpen={!!profileTargetId}
+        onClose={() => {
+          setProfileTargetId(null);
+        }}
+        onLogout={() => { setProfileTargetId(null); onLogout && onLogout(); }}
+        onNavigate={(uid) => setProfileTargetId(uid)}
+        onChat={handleChatTrigger}
+        onDeletePost={handleDeleteThought}
+        onOpenThread={(id) => {
+          setProfileTargetId(null);
+          setActiveThreadId(id);
+        }}
+      />
+
+      {/* Create Reel Modal (Step-by-Step) */}
+      <Modal isOpen={isCreateReelOpen} onClose={() => { if (!isPosting) setIsCreateReelOpen(false); }} title={reelStep === 1 ? "Broadcast_Uplink // Step 1" : "Signal_Metadata // Step 2"}>
+        <div className="space-y-6">
+          {reelStep === 1 ? (
+            <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed border-black bg-gray-50 text-center space-y-4">
+              <PlaySquare size={48} className="text-gray-400" />
+              <div>
+                <h4 className="font-black text-sm uppercase tracking-widest">Select_Source_Media</h4>
+                <p className="text-[10px] text-gray-500 font-bold uppercase mt-1">MP4 or WebM format // Max 60s</p>
+              </div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                className="hidden"
+                accept="video/*"
+                onChange={handleReelFileSelect}
+                disabled={isPosting}
+              />
+              <Button onClick={() => fileInputRef.current?.click()} variant="primary" className="px-6">CHOOSE_VIDEO</Button>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              {/* Preview */}
+              <div className="relative aspect-[9/16] max-h-48 mx-auto bg-black border-2 border-black overflow-hidden shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                <video src={filePreview || ''} className="w-full h-full object-cover opacity-80" muted autoPlay loop />
+                <button onClick={() => setReelStep(1)} className="absolute top-2 right-2 p-1 bg-black text-white border border-white hover:bg-gray-800"><Edit2 size={12} /></button>
+              </div>
+
+              <div className="space-y-3">
+                <label className="text-[10px] font-black uppercase tracking-widest text-gray-400">Captions // Description</label>
+                <textarea
+                  className="w-full h-24 bg-white border-2 border-black p-3 text-xs font-bold focus:outline-none focus:bg-yellow-50"
+                  placeholder="Tell the collective about this memory..."
+                  value={text}
+                  onChange={e => setText(e.target.value)}
+                  disabled={isPosting}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 flex items-center gap-1"><Compass size={10} /> Location</label>
+                  <Input
+                    placeholder="Where was this captured?"
+                    value={reelLocation}
+                    onChange={e => setReelLocation(e.target.value)}
+                    disabled={isPosting}
+                    className="font-bold text-xs"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 flex items-center gap-1"><Plus size={10} /> Hashtags</label>
+                  <Input
+                    placeholder="art, nature, vibe..."
+                    value={reelTags}
+                    onChange={e => setReelTags(e.target.value)}
+                    disabled={isPosting}
+                    className="font-bold text-xs"
+                  />
+                </div>
+              </div>
+
+              <div className="flex justify-between items-center pt-4 border-t-2 border-black">
+                <button onClick={() => { if (!isPosting) setIsCreateReelOpen(false); }} className="text-[10px] font-black uppercase hover:underline">Discard_Session</button>
+                <div className="flex gap-2">
+                  <Button onClick={() => setReelStep(1)} disabled={isPosting}>Back</Button>
+                  <Button onClick={handlePostReel} variant="primary" disabled={isPosting}>
+                    {isPosting ? 'UPLOADING...' : 'BROADCAST_REEL'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </Modal>
+
+      {/* Hidden Share Card for Generation */}
+      {
+        shareCardThread && (
+          <div
+            ref={shareCardRef}
+            className="fixed top-0 left-[-9999px] w-[400px] bg-[#fcfbf9] p-6 border-4 border-black font-serif text-black"
+            style={{ zIndex: -1 }}
+          >
+            {/* Header */}
+            <div className="flex items-center gap-3 mb-4 border-b-2 border-black pb-2">
+              <div className="w-12 h-12 bg-black rounded-full overflow-hidden border-2 border-white shrink-0">
+                {shareCardThread.authorPhoto ? (
+                  <img src={shareCardThread.authorPhoto} className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-white text-xl font-bold">{shareCardThread.authorName[0]}</div>
+                )}
+              </div>
+              <div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Thought Stream</div>
+                <div className="text-xl font-bold">#{shareCardThread.authorName}</div>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="mb-4">
+              {shareCardThread.title && <h1 className="text-2xl font-bold mb-2 leading-tight">{shareCardThread.title}</h1>}
+              <p className="text-lg leading-relaxed whitespace-pre-wrap font-medium font-sans text-gray-800">
+                {shareCardThread.text.length > 300 ? shareCardThread.text.substring(0, 300) + '...' : shareCardThread.text}
+              </p>
+            </div>
+
+            {/* Image if exists */}
+            {shareCardThread.mediaUrl && !shareCardThread.mediaType?.startsWith('video') && (
+              <div className="mb-4 border-2 border-black overflow-hidden relative aspect-video bg-gray-100">
+                <img src={shareCardThread.mediaUrl} className="w-full h-full object-cover grayscale contrast-125" />
+              </div>
+            )}
+
+            {/* Footer */}
+            <div className="flex justify-between items-end mt-8 border-t-2 border-black pt-2">
+              <div className="text-sm font-mono text-gray-600">
+                {new Date(shareCardThread.createdAt.toDate ? shareCardThread.createdAt.toDate() : shareCardThread.createdAt).toLocaleDateString()}
+              </div>
+              <div className="text-right">
+                <div className="text-[10px] uppercase font-bold text-gray-500">Read more at</div>
+                <div className="font-bold flex items-center gap-1"><Share2 size={12} /> sumanmandal.com</div>
+              </div>
+            </div>
+          </div>
+        )
+      }
+      {/* Blink Full Screen Reels Viewer */}
+      {openedBlinkId && (
+        <div className="fixed inset-0 z-[200] bg-black md:bg-black/95 flex items-center justify-center overflow-hidden">
+          {/* Top Controls */}
+          <div className="absolute top-6 left-6 right-6 z-[210] flex justify-between items-center">
+            <button
+              onClick={() => { setIsCreateReelOpen(true); setReelStep(1); }}
+              className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-full text-white backdrop-blur-md transition-all border border-white/20 flex items-center gap-2 font-black text-[10px] tracking-widest uppercase"
+            >
+              <Plus size={16} /> Post_Reel
+            </button>
+            <button
+              onClick={() => setOpenedBlinkId(null)}
+              className="p-3 bg-white/10 hover:bg-white/20 rounded-full text-white backdrop-blur-md transition-all border border-white/20"
+            >
+              <X size={24} />
+            </button>
+          </div>
+
+          <div className="w-full h-full overflow-y-auto snap-y snap-mandatory custom-scrollbar scroll-smooth flex flex-col items-center">
+            {(() => {
+              const videoBlinks = thoughts.filter(t => t.mediaType === 'video');
+              const initialIndex = videoBlinks.findIndex(b => b.id === openedBlinkId);
+              // Simple ordering to start with the clicked one (not true snap scroll to specific index without ref, but good for now)
+              // For a better experience, we should use a ref and scrollIntoView or just reorder the array temporarily
+              const orderedBlinks = [...videoBlinks.slice(initialIndex), ...videoBlinks.slice(0, initialIndex)];
+
+              return orderedBlinks.map((blink) => (
+                <div key={blink.id} className="snap-start w-full h-[100dvh] flex items-center justify-center relative shrink-0">
+                  <video
+                    src={blink.mediaUrl}
+                    controls
+                    autoPlay
+                    loop
+                    className="h-full w-full object-contain md:max-w-md bg-black shadow-2xl"
+                  />
+
+                  {/* Overlay Info (Reels Style) */}
+                  <div className="absolute bottom-0 left-0 right-0 p-8 md:p-12 bg-gradient-to-t from-black/80 via-black/40 to-transparent text-white md:max-w-md md:mx-auto">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-10 h-10 rounded-full bg-white border-2 border-white overflow-hidden shrink-0 shadow-lg">
+                        {blink.authorPhoto ? <img src={blink.authorPhoto} alt="" className="w-full h-full object-cover" /> : <User size={20} className="text-black ml-2 mt-2" />}
+                      </div>
+                      <div className="flex-1">
+                        <button
+                          onClick={() => { setProfileTargetId(blink.authorId); setOpenedBlinkId(null); }}
+                          className="font-black text-sm uppercase tracking-tighter hover:underline"
+                        >
+                          #{blink.authorName}
+                        </button>
+                        <p className="text-[10px] text-white/70 font-bold uppercase tracking-widest">{formatDate(blink.createdAt)}</p>
+                      </div>
+                      <Button
+                        variant="primary"
+                        className="bg-yellow-400 border-black text-black text-[9px] font-black px-4"
+                        onClick={() => handleVote(blink.id, 1)}
+                      >
+                        <ArrowBigUp size={14} className="mr-1" /> {blink.likes}
+                      </Button>
+                    </div>
+                    {blink.title && <h4 className="font-black text-lg mb-2 uppercase tracking-tight">{blink.title}</h4>}
+                    <p className="text-xs text-white/90 leading-relaxed font-bold font-mono line-clamp-3 mb-3">{blink.text}</p>
+
+                    <div className="flex flex-wrap gap-2 items-center">
+                      {blink.location && (
+                        <div className="flex items-center gap-1 text-[9px] font-black uppercase text-yellow-400 bg-black/40 px-2 py-1 rounded border border-yellow-400/30">
+                          <Compass size={10} /> {blink.location}
+                        </div>
+                      )}
+                      {blink.tags && blink.tags.map((tag, idx) => (
+                        <span key={idx} className="text-[9px] font-black uppercase text-white/60 hover:text-white transition-colors">
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Sidebar Actions */}
+                  <div className="absolute right-4 bottom-32 flex flex-col gap-6 items-center">
+                    <div className="flex flex-col items-center">
+                      <button onClick={() => handleVote(blink.id, 1)} className="p-3 bg-white/10 backdrop-blur-md rounded-full border border-white/20 hover:bg-white/20 shadow-lg transition-all">
+                        <ArrowBigUp size={24} className={blink.userVote === 1 ? 'text-yellow-400' : 'text-white'} />
+                      </button>
+                      <span className="text-[10px] font-black mt-1 text-white">{blink.likes}</span>
+                    </div>
+                    <button onClick={() => handleShare(blink)} className="p-3 bg-white/10 backdrop-blur-md rounded-full border border-white/20 hover:bg-white/20 shadow-lg transition-all text-white">
+                      <Share2 size={24} />
+                    </button>
+                    <button onClick={() => setOpenedBlinkId(null)} className="p-3 bg-red-500/20 backdrop-blur-md rounded-full border border-red-500/40 hover:bg-red-500/40 shadow-lg transition-all text-red-400">
+                      <X size={24} />
+                    </button>
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+        </div>
+      )}
+      {/* Edit Space Modal */}
+      <Modal isOpen={isEditSpaceOpen} onClose={() => setIsEditSpaceOpen(false)} title="Edit Space">
+        {activeSpace && (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Space Name</label>
+              <Input
+                value={activeSpace.name}
+                onChange={e => setActiveSpace({ ...activeSpace, name: e.target.value })}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Description</label>
+              <textarea
+                className="w-full h-24 bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm focus:outline-none focus:ring-2 focus:ring-black/5"
+                value={activeSpace.description || ''}
+                onChange={e => setActiveSpace({ ...activeSpace, description: e.target.value })}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest flex justify-between">
+                  Avatar
+                  <button onClick={() => avatarInputRef.current?.click()} className="text-black hover:underline tracking-tight">Upload_File</button>
+                </label>
+                <input type="file" ref={avatarInputRef} className="hidden" accept="image/*" onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (file && activeSpace) {
+                    try {
+                      setIsUpdatingSpace(true);
+                      const url = await uploadMedia(file);
+                      if (url) setActiveSpace({ ...activeSpace, avatarURL: url });
+                    } catch (e) {
+                      alert("Upload failed");
+                    } finally {
+                      setIsUpdatingSpace(false);
+                    }
+                  }
+                }} />
+                <Input
+                  value={activeSpace.avatarURL || ''}
+                  onChange={e => setActiveSpace({ ...activeSpace, avatarURL: e.target.value })}
+                  placeholder="https://..."
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest flex justify-between">
+                  Banner
+                  <button onClick={() => bannerInputRef.current?.click()} className="text-black hover:underline tracking-tight">Upload_File</button>
+                </label>
+                <input type="file" ref={bannerInputRef} className="hidden" accept="image/*" onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (file && activeSpace) {
+                    try {
+                      setIsUpdatingSpace(true);
+                      const url = await uploadMedia(file);
+                      if (url) setActiveSpace({ ...activeSpace, bannerURL: url });
+                    } catch (e) {
+                      alert("Upload failed");
+                    } finally {
+                      setIsUpdatingSpace(false);
+                    }
+                  }
+                }} />
+                <Input
+                  value={activeSpace.bannerURL || ''}
+                  onChange={e => setActiveSpace({ ...activeSpace, bannerURL: e.target.value })}
+                  placeholder="https://..."
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={activeSpace.isPrivate}
+                onChange={e => setActiveSpace({ ...activeSpace, isPrivate: e.target.checked })}
+                id="isPrivate"
+              />
+              <label htmlFor="isPrivate" className="text-xs font-bold text-gray-600">Private Space (Requires Approval)</label>
+            </div>
+            <div className="flex justify-end gap-2 pt-4">
+              <Button onClick={() => setIsEditSpaceOpen(false)} disabled={isUpdatingSpace}>CANCEL</Button>
+              <Button
+                variant="primary"
+                disabled={isUpdatingSpace}
+                onClick={async () => {
+                  try {
+                    setIsUpdatingSpace(true);
+                    await updateSpace(activeSpace.id, activeSpace);
+                    setIsEditSpaceOpen(false);
+                    alert("Space updated successfully!");
+                  } catch (e) {
+                    console.error(e);
+                    alert("Failed to update space. Ensure you have admin permissions.");
+                  } finally {
+                    setIsUpdatingSpace(false);
+                  }
+                }}
+              >
+                {isUpdatingSpace ? 'SAVING...' : 'SAVE_CHANGES'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Member Management Modal */}
+      <Modal isOpen={isMemberManageOpen} onClose={() => setIsMemberManageOpen(false)} title="Manage Space Cluster">
+        <div className="space-y-6">
+          {isSpaceAdmin && (
+            <div className="space-y-4 pt-2 border-b-2 border-dashed border-gray-100 pb-6">
+              <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 flex items-center gap-2">
+                <Loader size={12} className={pendingMembers.length > 0 ? 'animate-spin' : ''} />
+                Pending Requests ({pendingMembers.length})
+              </h3>
+              {pendingMembers.length > 0 ? (
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
+                  {pendingMembers.map(m => (
+                    <div key={m.uid} className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-100 rounded-xl">
+                      <div className="w-8 h-8 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold text-[10px]">
+                        {m.photoURL ? <img src={m.photoURL} alt="" /> : m.name?.[0]}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-bold text-xs truncate text-gray-900">#{m.name}</div>
+                      </div>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={async () => {
+                            await respondToSpaceRequest(activeSpace!.id, m.uid, true);
+                            setPendingMembers(prev => prev.filter(p => p.uid !== m.uid));
+                          }}
+                          className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg"
+                        >
+                          <Check size={16} />
+                        </button>
+                        <button
+                          onClick={async () => {
+                            await respondToSpaceRequest(activeSpace!.id, m.uid, false);
+                            setPendingMembers(prev => prev.filter(p => p.uid !== m.uid));
+                          }}
+                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"
+                        >
+                          <X size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 italic">No pending requests.</p>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-4">
+            <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 flex items-center gap-2">
+              <Users size={12} /> Current Nodes ({spaceMembers.length})
+            </h3>
+            <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
+              {[...spaceMembers].sort((a, b) => {
+                const hierarchy = { 'owner': 0, 'admin': 1, 'member': 2 };
+                return (hierarchy[a.role as keyof typeof hierarchy] ?? 2) - (hierarchy[b.role as keyof typeof hierarchy] ?? 2);
+              }).map(member => (
+                <div key={member.uid} className="flex items-center gap-3 p-3 border border-gray-100 rounded-xl hover:bg-gray-50">
+                  <div className="w-8 h-8 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold text-[10px]">
+                    {member.photoURL ? <img src={member.photoURL} alt="" /> : member.name?.[0]}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <div className="font-bold text-xs truncate text-gray-900">#{member.name}</div>
+                      <span className={`text-[7px] font-black px-1 border border-black uppercase tracking-tight
+                        ${member.role === 'owner' ? 'bg-yellow-400 text-black' :
+                          member.role === 'admin' ? 'bg-black text-white' : 'bg-gray-100 text-gray-400'}
+                      `}>
+                        {member.role || 'MEMBER'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-1.5">
+                    {/* View Profile Action */}
+                    <button
+                      onClick={() => setProfileTargetId(member.uid)}
+                      className="p-1.5 text-gray-400 hover:text-black hover:bg-gray-100 rounded-lg transition-all"
+                      title="View Profile"
+                    >
+                      <User size={14} />
+                    </button>
+
+                    {/* Admin Actions (Requires Admin status) */}
+                    {isSpaceAdmin && member.uid !== user?.uid && (
+                      <>
+                        {/* Make Admin Toggle */}
+                        {isSpaceOwner && member.role !== 'admin' && member.role !== 'owner' && (
+                          <button
+                            onClick={async () => {
+                              if (window.confirm(`Promote #${member.name} to Admin?`)) {
+                                await giveAdminRole(activeSpace!.id, member.uid);
+                                setSpaceMembers(prev => prev.map(m => m.uid === member.uid ? { ...m, role: 'admin' } : m));
+                              }
+                            }}
+                            className="p-1.5 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                            title="Promote to Admin"
+                          >
+                            <ShieldCheck size={14} />
+                          </button>
+                        )}
+
+                        {/* Kick Action (Don't let admins kick owners) */}
+                        {(isSpaceOwner || (isSpaceAdmin && member.role === 'member')) && (
+                          <button
+                            onClick={async () => {
+                              if (window.confirm(`Kick #${member.name} from the cluster?`)) {
+                                await removeMember(activeSpace!.id, member.uid);
+                                setSpaceMembers(prev => prev.filter(p => p.uid !== member.uid));
+                              }
+                            }}
+                            className="p-1.5 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                            title="Kick Node"
+                          >
+                            <UserMinus size={14} />
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+    </>
+  );
+};
+
