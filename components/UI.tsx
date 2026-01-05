@@ -141,6 +141,47 @@ export const Badge: React.FC<BadgeProps> = ({ children, color = THEME.accent }) 
   </span>
 );
 
+// --- TOAST NOTIFICATIONS ---
+
+interface ToastProps {
+  message: string;
+  type?: 'success' | 'error' | 'info';
+  onClose: () => void;
+}
+
+export const Toast: React.FC<ToastProps> = ({ message, type = 'info', onClose }) => {
+  const bgColor = type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : 'bg-blue-500';
+  const icon = type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ';
+
+  return (
+    <div className={`fixed top-4 right-4 z-[200] ${bgColor} text-white px-4 py-2 rounded-lg shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] border-2 border-black animate-slide-down flex items-center gap-2 max-w-sm`}>
+      <span className="font-bold">{icon}</span>
+      <span className="text-sm font-medium">{message}</span>
+      <button onClick={onClose} className="ml-auto hover:bg-black/20 p-1 rounded">
+        <X size={14} />
+      </button>
+    </div>
+  );
+};
+
+interface ToastContainerProps {
+  toasts: Array<{ id: string; message: string; type: 'success' | 'error' | 'info' }>;
+  removeToast: (id: string) => void;
+}
+
+export const ToastContainer: React.FC<ToastContainerProps> = ({ toasts, removeToast }) => (
+  <div className="fixed top-4 right-4 z-[200] space-y-2">
+    {toasts.map(toast => (
+      <Toast
+        key={toast.id}
+        message={toast.message}
+        type={toast.type}
+        onClose={() => removeToast(toast.id)}
+      />
+    ))}
+  </div>
+);
+
 interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -162,17 +203,17 @@ export const Modal: React.FC<ModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm"
+      className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/30 backdrop-blur-md animate-fade-in"
       onClick={onClose} // Close on backdrop click
     >
       <div
-        className={customClass || `w-full ${maxWidth} max-h-[90vh] flex flex-col animate-slide-up pointer-events-auto shadow-2xl`}
+        className={`${customClass || `w-full ${maxWidth} max-h-[90vh] flex flex-col animate-scale-in pointer-events-auto border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] bg-white`} transition-all duration-300`}
         onClick={(e) => e.stopPropagation()} // Prevent close when clicking inside
       >
         <Window
           title={title || 'Detail View'}
           onClose={onClose}
-          color="bg-white"
+          color="bg-black text-white"
           className="flex-1 min-h-0"
         >
           {children}

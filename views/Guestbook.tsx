@@ -5,7 +5,7 @@ import { UserProfile, Comment, Space, AppNotification } from '../types';
 import {
   subscribeToStream, postThought, votePost, updateUserProfile, deletePost, getPublicUserProfile, sendFriendRequest, acceptFriendRequest, declineFriendRequest, unfriend, fetchUserNetwork, fetchSpaces, createSpace, subscribeToNotifications, markNotificationRead, fetchNotifications, globalSearch, SearchResult, fetchIsMember, joinSpace, leaveSpace, fetchUserSpaces, fetchSpaceMembers, updateSpace, respondToSpaceRequest, giveAdminRole, fetchSpaceMembership, fetchPendingMembers, subscribeToFeed, uploadMedia, removeMember, fetchUserPosts
 } from '../services/store';
-import { Window, Button, Input, Modal, THEME } from '../components/UI';
+import { Window, Button, Input, Modal, THEME, ToastContainer } from '../components/UI';
 import { toBlob } from 'html-to-image';
 
 const formatDate = (timestamp: any) => {
@@ -184,7 +184,7 @@ const ThreadItem: React.FC<ThreadItemProps> = ({
             </div>
             <button
               onClick={handleUserClick}
-              className={`text-[11px] font-black tracking-wide hover:underline transition-colors flex items-center gap-1 text-gray-900`}
+              className={`text-[11px] font-black tracking-wide hover:underline transition-colors flex items-center gap-1 text-white bg-black px-1.5 py-0.5 rounded-md shadow-sm`}
             >
               #{thread.authorName}
             </button>
@@ -471,7 +471,7 @@ export const UserProfileModal = ({
       setBannerFile(null);
     } catch (e) {
       console.error(e);
-      alert("Failed to update profile");
+      showToast("Failed to update profile", 'error');
     } finally {
       setIsSaving(false);
     }
@@ -619,7 +619,7 @@ export const UserProfileModal = ({
                   {/* PROFILE INFO */}
                   <div className="flex-1 text-center md:text-left">
                     <div className="mb-4">
-                      <h2 className="text-3xl font-black uppercase tracking-tighter text-black mb-1">{profile.fullName || profile.displayName}</h2>
+                      <h2 className="text-3xl font-black uppercase tracking-tighter text-black bg-white px-4 py-0 mb-4 inline-block border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">{profile.fullName || profile.displayName}</h2>
                       <div className="flex flex-wrap justify-center md:justify-start gap-2">
                         <span className="px-2 py-0.5 border-2 border-black bg-white text-[9px] font-black tracking-widest uppercase">NODE: #{profile.displayName}</span>
                         {isOwnProfile && <span className="px-2 py-0.5 border-2 border-black bg-black text-white text-[9px] font-black tracking-widest uppercase italic">ROOT_USER</span>}
@@ -998,6 +998,21 @@ export const MindStream = ({
 
   // Search State
   const [searchQuery, setSearchQuery] = useState('');
+
+  // Toast Notifications
+  const [toasts, setToasts] = useState<Array<{ id: string; message: string; type: 'success' | 'error' | 'info' }>>([]);
+
+  const showToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
+    const id = Date.now().toString();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 5000); // Auto remove after 5 seconds
+  };
+
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(t => t.id !== id));
+  };
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [searchFilter, setSearchFilter] = useState<'all' | 'user' | 'group' | 'page'>('all');
@@ -1036,7 +1051,7 @@ export const MindStream = ({
     if (file) {
       // Basic size validation (e.g., 50MB)
       if (file.size > 50 * 1024 * 1024) {
-        alert("File too large. Max size 50MB.");
+      showToast("File too large. Max size 50MB.", 'error');
         return;
       }
       setSelectedFile(file);
@@ -1062,7 +1077,7 @@ export const MindStream = ({
       clearFile();
       setIsCreateOpen(false);
     } catch (e: any) {
-      alert(`Failed to post: ${e.message}`);
+      showToast(`Failed to post: ${e.message}`, 'error');
     } finally {
       setIsPosting(false);
     }
@@ -1082,7 +1097,7 @@ export const MindStream = ({
       setIsCreateReelOpen(false);
       setReelStep(1);
     } catch (e: any) {
-      alert(`Failed to post reel: ${e.message}`);
+      showToast(`Failed to post reel: ${e.message}`, 'error');
     } finally {
       setIsPosting(false);
     }
@@ -1101,7 +1116,7 @@ export const MindStream = ({
       video.onloadedmetadata = () => {
         window.URL.revokeObjectURL(video.src);
         if (video.duration > 61) {
-          alert("Note: This video is longer than 60 seconds. Only the first 60 seconds will be featured in the collective feed.");
+          showToast("Note: This video is longer than 60 seconds. Only the first 60 seconds will be featured in the collective feed.", 'info');
         }
         setSelectedFile(file);
         setFilePreview(URL.createObjectURL(file));
@@ -1120,8 +1135,7 @@ export const MindStream = ({
         handle: (newSpaceType === 'group' ? 'g/' : '@') + newSpaceHandle,
         description: newSpaceDesc,
         type: newSpaceType,
-        ownerId: user.uid,
-        isPrivate: false
+        owner_id: user.uid
       });
       if (freshSpace) {
         setSpaces(prev => [freshSpace, ...prev]);
@@ -1139,8 +1153,8 @@ export const MindStream = ({
         setIsMemberOfActiveSpace(true);
         setSpaceMembers([{ uid: user.uid, name: user.displayName, photoURL: user.photoURL, role: 'owner' }]);
       }
-    } catch (e) {
-      alert("Failed to create space. Handle might be taken.");
+    } catch (e: any) {
+      showToast(e.message || "Failed to create space. Please try again.", 'error');
     } finally {
       setIsCreatingSpace(false);
     }
@@ -1159,7 +1173,7 @@ export const MindStream = ({
     } catch (e: any) {
       console.error("Failed to delete post on server", e);
       // Alert the user about the failure
-      alert(`Failed to delete post: ${e.message}`);
+      showToast(`Failed to delete post: ${e.message}`, 'error');
       // Note: For a robust app we would revert the optimistic update here by re-fetching.
       // Since we have real-time subscription, the next update might fix it or we can force reload,
       // but often if it fails on server, it won't be deleted, so it will come back on next sync.
@@ -1193,14 +1207,14 @@ export const MindStream = ({
             } else {
               // Fallback for desktop/unsupported
               await navigator.clipboard.writeText(url);
-              alert("Link copied! (Image sharing not supported on this device)");
+              showToast("Link copied! (Image sharing not supported on this device)", 'success');
             }
           }
         } catch (err) {
           console.error("Share gen error:", err);
           const url = `${window.location.origin}${window.location.pathname}?thread=${thread.id}`;
           await navigator.clipboard.writeText(url);
-          alert("Link copied!");
+          showToast("Link copied!", 'success');
         } finally {
           setShareCardThread(null);
         }
@@ -1217,7 +1231,7 @@ export const MindStream = ({
     try {
       await postThought(text, user, parentId, undefined, file);
     } catch (e: any) {
-      alert(`Failed to reply: ${e.message}`);
+      showToast(`Failed to reply: ${e.message}`, 'error');
     }
   };
 
@@ -1234,7 +1248,7 @@ export const MindStream = ({
         if (space && space.type === 'group') {
           const isMember = await fetchIsMember(space.id, user.uid);
           if (!isMember) {
-            alert("Only members of this group can vote on posts.");
+            showToast("Only members of this group can vote on posts.", 'error');
             return;
           }
         }
@@ -1331,10 +1345,10 @@ export const MindStream = ({
 
           <div className="px-5 py-5 border-b border-gray-100 hidden md:flex items-center justify-between bg-white/50">
             <div
-              className="cursor-pointer hover:opacity-80 transition-opacity"
+              className="flex flex-col items-start cursor-pointer hover:opacity-80 transition-opacity"
               onClick={() => { setActiveView('stream'); setActiveSpace(null); }}
             >
-              <h2 className="font-serif text-xl font-black tracking-tight text-gray-900 leading-none">Stream</h2>
+              <h2 className="font-serif text-xl font-black tracking-tight text-gray-900 leading-none ml-5">Stream</h2>
               <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5 opacity-70">The living collective mind</p>
             </div>
             {canPost && (
@@ -1806,7 +1820,7 @@ export const MindStream = ({
 
                             <div className="flex-1 pb-2">
                               <div className="flex items-center gap-3 mb-1">
-                                <h2 className="text-3xl font-black tracking-tighter uppercase leading-none text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">{activeSpace.name}</h2>
+                                <h2 className="text-3xl font-black tracking-tighter uppercase leading-none text-black bg-white px-4 py-2 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">{activeSpace.name}</h2>
                                 {activeSpace.isPrivate && <ShieldCheck size={20} className="text-yellow-400 drop-shadow-md" />}
                               </div>
                               <div className="flex flex-wrap items-center gap-2 mt-2">
@@ -1865,7 +1879,7 @@ export const MindStream = ({
                                     await joinSpace(activeSpace.id, user.uid, activeSpace.isPrivate);
                                     if (activeSpace.isPrivate) {
                                       setUserSpaceStatus('pending');
-                                      alert("Request sent to admins!");
+                                      showToast("Request sent to admins!", 'info');
                                     } else {
                                       setIsMemberOfActiveSpace(true);
                                       setUserSpaceStatus('accepted');
@@ -2857,7 +2871,7 @@ export const MindStream = ({
                       const url = await uploadMedia(file);
                       if (url) setActiveSpace({ ...activeSpace, avatarURL: url });
                     } catch (e) {
-                      alert("Upload failed");
+                      showToast("Upload failed", 'error');
                     } finally {
                       setIsUpdatingSpace(false);
                     }
@@ -2882,7 +2896,7 @@ export const MindStream = ({
                       const url = await uploadMedia(file);
                       if (url) setActiveSpace({ ...activeSpace, bannerURL: url });
                     } catch (e) {
-                      alert("Upload failed");
+                      showToast("Upload failed", 'error');
                     } finally {
                       setIsUpdatingSpace(false);
                     }
@@ -2913,11 +2927,13 @@ export const MindStream = ({
                   try {
                     setIsUpdatingSpace(true);
                     await updateSpace(activeSpace.id, activeSpace);
+                    // Update the spaces list with the new data
+                    setSpaces(prev => prev.map(s => s.id === activeSpace.id ? activeSpace : s));
                     setIsEditSpaceOpen(false);
-                    alert("Space updated successfully!");
+                    showToast("Space updated successfully!", 'success');
                   } catch (e) {
                     console.error(e);
-                    alert("Failed to update space. Ensure you have admin permissions.");
+                    showToast("Failed to update space. Ensure you have admin permissions.", 'error');
                   } finally {
                     setIsUpdatingSpace(false);
                   }
@@ -3056,6 +3072,9 @@ export const MindStream = ({
           </div>
         </div>
       </Modal>
+
+      {/* Toast Notifications */}
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
 
     </>
   );

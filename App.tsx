@@ -205,6 +205,9 @@ const App = () => {
 
       {/* MAIN CONTENT AREA */}
       <main className="flex-1 h-full overflow-hidden flex flex-col relative">
+        <div className="absolute top-2.5 left-1 z-50 hidden md:block">
+          <img src="https://i.ibb.co/mVJPnXxD/5c65fc3a-4f54-409c-827e-884d8e01c5ff.png" alt="logo" className="h-10 w-10" />
+        </div>
         <MindStream
           user={user}
           onOpenLogin={() => setIsLoginOpen(true)}

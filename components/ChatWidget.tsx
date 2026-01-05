@@ -8,7 +8,7 @@ import {
 import { UserProfile, ChatMessage, ChatGroup } from '../types';
 import {
   sendMessage, getPublicUserProfile, markChatAsRead,
-  createChatGroup, joinChatGroup, searchChatGroups, subscribeToChatGroups
+  createChatGroup, updateChatGroup, joinChatGroup, searchChatGroups, subscribeToChatGroups
 } from '../services/store';
 import { Window, Button, THEME, Input } from './UI';
 
@@ -30,10 +30,12 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
   const [myGroups, setMyGroups] = useState<ChatGroup[]>([]);
   const [chatTab, setChatTab] = useState<'personal' | 'groups'>('personal');
   const [isCreatingGroup, setIsCreatingGroup] = useState(false);
+  const [isEditingClub, setIsEditingClub] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [groupDesc, setGroupDesc] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<ChatGroup[]>([]);
+  const [showInviteModal, setShowInviteModal] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -91,9 +93,9 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
     if (!inputText.trim()) return;
 
     if (activeChatUser) {
-      await sendMessage(currentUser.uid, activeChatUser.uid, inputText, false);
+      await sendMessage(currentUser.uid, activeChatUser.uid, inputText, null);
     } else if (activeGroup) {
-      await sendMessage(currentUser.uid, activeGroup.id, inputText, true);
+      await sendMessage(currentUser.uid, null, inputText, activeGroup.id);
     }
 
     setInputText('');
@@ -102,13 +104,21 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
   const handleCreateGroup = async () => {
     if (!groupName.trim()) return;
     try {
-      const gid = await createChatGroup(groupName, groupDesc, currentUser.uid);
+      if (isEditingClub && activeGroup) {
+        // Update existing club
+        await updateChatGroup(activeGroup.id, groupName, groupDesc);
+        setIsEditingClub(false);
+        setActiveGroup({ ...activeGroup, name: groupName, description: groupDesc });
+      } else {
+        // Create new club
+        const gid = await createChatGroup(groupName, groupDesc, currentUser.uid);
+      }
       setIsCreatingGroup(false);
       setGroupName('');
       setGroupDesc('');
-      // Group subscription will update myGroups and we can maybe auto-open
     } catch (e) {
       console.error(e);
+      alert('Failed to save club. Please try again.');
     }
   };
 
@@ -152,7 +162,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
         onClick={() => setIsMinimized(false)}>
         <div className="flex items-center gap-2 font-bold text-xs uppercase relative">
           <MessageCircle size={14} />
-          {activeChatUser ? `DM: ${activeChatUser.displayName}` : activeGroup ? `Grp: ${activeGroup.name}` : 'Direct_Net'}
+          {activeChatUser ? `DM: ${activeChatUser.displayName}` : activeGroup ? `c/${activeGroup.name}` : 'Direct_Net'}
           {globalUnreadCount > 0 && (
             <span className="absolute -top-2 -right-3 bg-red-500 text-white text-[9px] w-4 h-4 rounded-full flex items-center justify-center border border-white">
               {globalUnreadCount}
@@ -169,7 +179,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
   return (
     <div className="fixed bottom-4 right-4 z-50 w-[95vw] md:w-[600px] h-[80vh] md:h-[600px] flex flex-col animate-slide-up shadow-[12px_12px_0px_0px_rgba(0,0,0,0.4)]">
       <Window
-        title={activeChatUser ? `Comm_Link: ${activeChatUser.displayName}` : activeGroup ? `Group_Link: ${activeGroup.name}` : 'Direct_Net // Social Hub'}
+        title={activeChatUser ? `Comm_Link: ${activeChatUser.displayName}` : activeGroup ? `Club: c/${activeGroup.name}` : 'Direct_Net // Social Hub'}
         color={THEME.blue}
         className="h-full flex flex-col"
         noPadding
@@ -198,10 +208,16 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                   </div>
                   <div className="min-w-0">
                     <div className="font-black text-sm truncate uppercase tracking-tight">
-                      {activeGroup ? `g/${activeGroup.name}` : (activeChatUser?.fullName || activeChatUser?.displayName)}
+                      {activeGroup ? `c/${activeGroup.name}` : (activeChatUser?.fullName || activeChatUser?.displayName)}
                     </div>
-                    <div className="text-[10px] text-gray-500 font-bold uppercase tracking-widest">
-                      {activeGroup ? `${activeGroup.isPublic ? 'Public' : 'Private'} Group` : 'Direct Signal'}
+                    <div className="text-[10px] text-gray-500 font-bold uppercase tracking-widest flex items-center gap-2">
+                      {activeGroup ? (
+                        <>
+                          <span>{activeGroup.isPublic ? 'Public' : 'Private'} Club</span>
+                          <button onClick={() => { setIsEditingClub(true); setIsCreatingGroup(true); setGroupName(activeGroup.name); setGroupDesc(activeGroup.description || ''); setActiveGroup(null); }} className="ml-auto px-2 py-0.5 bg-black text-white text-[8px] hover:bg-gray-800 transition-colors">EDIT</button>
+                          <button onClick={async () => { const link = `${window.location.origin}?club=${activeGroup.id}`; await navigator.clipboard.writeText(link); alert('Club link copied!'); }} className="px-2 py-0.5 bg-blue-600 text-white text-[8px] hover:bg-blue-700 transition-colors">SHARE</button>
+                        </>
+                      ) : 'Direct Signal'}
                     </div>
                   </div>
                 </div>
@@ -249,7 +265,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                   value={inputText}
                   onChange={e => setInputText(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleSend()}
-                  placeholder={activeGroup ? `Message g/${activeGroup.name}...` : `Message #${activeChatUser?.displayName}...`}
+                  placeholder={activeGroup ? `Message c/${activeGroup.name}...` : `Message #${activeChatUser?.displayName}...`}
                   className="flex-1 text-sm font-medium"
                   autoFocus
                 />
@@ -260,25 +276,25 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
             // --- CREATE GROUP VIEW ---
             <div className="flex-1 p-6 flex flex-col gap-6 animate-fade-in bg-gray-50">
               <div className="flex items-center gap-3">
-                <Button onClick={() => setIsCreatingGroup(false)} className="px-2 py-1"><ChevronLeft size={16} /></Button>
-                <h3 className="font-black text-lg tracking-tighter uppercase">Construct_New_Group</h3>
+                <Button onClick={() => { setIsCreatingGroup(false); setIsEditingClub(false); }} className="px-2 py-1"><ChevronLeft size={16} /></Button>
+                <h3 className="font-black text-lg tracking-tighter uppercase">{isEditingClub ? 'Edit_Club' : 'Create_New_Club'}</h3>
               </div>
 
               <div className="space-y-4 max-w-md mx-auto w-full">
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Group Designation</label>
+                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Club Name</label>
                   <Input
-                    placeholder="e.g. Design Underground"
+                    placeholder="e.g. Design Enthusiasts"
                     value={groupName}
                     onChange={e => setGroupName(e.target.value)}
                     className="text-base font-bold"
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Transmission Log / Description</label>
+                  <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Club Description</label>
                   <textarea
                     className="w-full h-32 bg-white border border-black p-4 text-sm focus:outline-none focus:ring-4 focus:ring-black/5 transition-all outline-none font-medium custom-scrollbar"
-                    placeholder="What's the purpose of this cluster?"
+                    placeholder="What's this club about?"
                     value={groupDesc}
                     onChange={e => setGroupDesc(e.target.value)}
                   />
@@ -289,7 +305,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                   className="w-full py-4 font-black text-sm tracking-widest"
                   disabled={!groupName.trim()}
                 >
-                  INITIALIZE CLUSTER
+                  {isEditingClub ? 'SAVE CHANGES' : 'CREATE CLUB'}
                 </Button>
               </div>
             </div>
@@ -307,7 +323,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                   onClick={() => setChatTab('groups')}
                   className={`flex-1 py-4 text-xs font-black uppercase tracking-widest flex items-center justify-center gap-2 transition-all ${chatTab === 'groups' ? 'bg-black text-white' : 'bg-white text-gray-400 hover:text-black hover:bg-gray-50'}`}
                 >
-                  <Users size={14} /> Groups
+                  <Users size={14} /> Clubs
                 </button>
               </div>
 
@@ -371,7 +387,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                     <div className="flex gap-2">
                       <div className="flex-1 relative">
                         <Input
-                          placeholder="Search public clusters..."
+                          placeholder="Search public clubs..."
                           className="pl-10 text-xs py-3"
                           value={searchQuery}
                           onChange={e => setSearchQuery(e.target.value)}
@@ -393,7 +409,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                               <div className="flex items-center gap-3">
                                 <div className="w-8 h-8 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center"><Hash size={14} /></div>
                                 <div>
-                                  <div className="text-xs font-black uppercase">g/{g.name}</div>
+                                  <div className="text-xs font-black uppercase">c/{g.name}</div>
                                   <div className="text-[9px] text-gray-400 font-bold">{g.memberCount || 1} Members</div>
                                 </div>
                               </div>
@@ -405,11 +421,11 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                     )}
 
                     <div className="space-y-3">
-                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-2">Your Clusters</p>
+                      <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest border-b border-gray-100 pb-2">Your Clubs</p>
                       {myGroups.length === 0 ? (
                         <div className="py-12 flex flex-col items-center text-center text-gray-300 gap-3 opacity-50">
                           <Users size={48} strokeWidth={1} />
-                          <p className="text-xs font-black uppercase tracking-widest max-w-[200px]">You haven't joined any group clusters yet.</p>
+                          <p className="text-xs font-black uppercase tracking-widest max-w-[200px]">You haven't joined any clubs yet.</p>
                         </div>
                       ) : (
                         myGroups.map(g => {
@@ -427,7 +443,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                               </div>
                               <div className="flex-1 min-w-0">
                                 <div className="flex justify-between items-baseline mb-0.5">
-                                  <div className="font-black text-sm uppercase tracking-tight truncate">g/{g.name}</div>
+                                  <div className="font-black text-sm uppercase tracking-tight truncate">c/{g.name}</div>
                                   {lastMsg && <div className="text-[9px] text-gray-400 font-black uppercase tracking-tighter">{new Date(lastMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
                                 </div>
                                 <div className="text-xs text-gray-500 truncate group-hover:text-black flex items-center gap-1 font-medium">
@@ -436,7 +452,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                                       <span className="text-gray-400 font-black text-[9px] uppercase shrink-0">m/{lastMsg.senderName}:</span>
                                       {lastMsg.text}
                                     </>
-                                  ) : (g.description || 'Welcome to the cluster.')}
+                                  ) : (g.description || 'Welcome to the club.')}
                                 </div>
                               </div>
                               <div className="w-8 h-8 flex items-center justify-center text-gray-300 opacity-0 group-hover:opacity-100 transition-opacity">

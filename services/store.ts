@@ -296,6 +296,26 @@ export const subscribeToFeed = (callback: (posts: Comment[]) => void) => {
 
     if (data) {
       const allPosts = data.map(mapToComment);
+
+      // Get unique author IDs
+      const authorIds = [...new Set(allPosts.map(p => p.authorId))];
+
+      // Fetch latest profiles for these authors
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('uid, photo_url')
+        .in('uid', authorIds);
+
+      const profileMap = new Map(profiles?.map(p => [p.uid, p.photo_url]) || []);
+
+      // Update authorPhoto with latest from profiles
+      allPosts.forEach(p => {
+        const latestPhoto = profileMap.get(p.authorId);
+        if (latestPhoto) {
+          p.authorPhoto = latestPhoto;
+        }
+      });
+
       const postMap = new Map<string, Comment>();
       allPosts.forEach(p => postMap.set(p.id, p));
 
@@ -461,8 +481,27 @@ export const fetchUserSpaces = async (userId: string): Promise<Space[]> => {
 };
 
 export const createSpace = async (spaceData: any) => {
-  const { data, error } = await supabase.from('spaces').insert(spaceData).select().single();
-  if (error) throw error;
+  // Check if handle already exists
+  const { data: existing } = await supabase
+    .from('spaces')
+    .select('handle')
+    .eq('handle', spaceData.handle)
+    .maybeSingle();
+
+  if (existing) {
+    throw new Error(`Handle "${spaceData.handle}" is already taken.`);
+  }
+
+  // Remove isPrivate if it exists since the column doesn't exist in DB
+  const { isPrivate, ...cleanData } = spaceData;
+
+  const { data, error } = await supabase.from('spaces').insert(cleanData).select().single();
+  if (error) {
+    if (error.code === '23505') {
+      throw new Error(`Handle "${spaceData.handle}" is already taken.`);
+    }
+    throw error;
+  }
   return data;
 };
 
@@ -586,7 +625,22 @@ export const globalSearch = async (query: string): Promise<any[]> => {
 
 // --- STUBS ---
 export const markChatAsRead = async (...args: any[]) => { };
-export const updateSpace = async (id: string, updates: any) => { };
+export const updateSpace = async (spaceId: string, updates: Partial<Space>) => {
+  const { error } = await supabase
+    .from('spaces')
+    .update({
+      name: updates.name,
+      handle: updates.handle,
+      description: updates.description,
+      avatar_url: updates.avatarURL,
+      banner_url: updates.bannerURL,
+      is_private: updates.isPrivate,
+      type: updates.type
+    })
+    .eq('id', spaceId);
+
+  if (error) throw error;
+};
 export const fetchSpaceMembers = async (sid: string) => { return [] };
 export const respondToSpaceRequest = async (sid: string, uid: string, acc: boolean) => { };
 export const giveAdminRole = async (sid: string, uid: string) => { };
@@ -614,6 +668,15 @@ export const createChatGroup = async (name: string, desc: string, userId: string
   await joinChatGroup(data.id, userId);
 
   return data.id;
+};
+
+export const updateChatGroup = async (groupId: string, name: string, description: string) => {
+  const { error } = await supabase
+    .from('chat_groups')
+    .update({ name, description })
+    .eq('id', groupId);
+
+  if (error) throw error;
 };
 
 export const joinChatGroup = async (groupId: string, userId: string) => {
@@ -675,7 +738,3 @@ export const subscribeToChatGroups = (userId: string, callback: (groups: ChatGro
     supabase.removeChannel(sub);
   };
 };
-
-export const auth = { currentUser: null } as any;
-export const db = {} as any;
-export const storage = {} as any;
