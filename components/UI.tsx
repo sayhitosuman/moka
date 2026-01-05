@@ -147,6 +147,7 @@ interface ModalProps {
   title?: string;
   children?: React.ReactNode;
   customClass?: string;
+  maxWidth?: string;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -154,7 +155,8 @@ export const Modal: React.FC<ModalProps> = ({
   onClose,
   title,
   children,
-  customClass
+  customClass,
+  maxWidth = "max-w-2xl"
 }) => {
   if (!isOpen) return null;
 
@@ -164,7 +166,7 @@ export const Modal: React.FC<ModalProps> = ({
       onClick={onClose} // Close on backdrop click
     >
       <div
-        className={customClass || "w-full max-w-2xl max-h-[90vh] flex flex-col animate-slide-up pointer-events-auto shadow-2xl"}
+        className={customClass || `w-full ${maxWidth} max-h-[90vh] flex flex-col animate-slide-up pointer-events-auto shadow-2xl`}
         onClick={(e) => e.stopPropagation()} // Prevent close when clicking inside
       >
         <Window

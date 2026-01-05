@@ -6,6 +6,7 @@ export interface UserProfile {
   displayName: string;
   fullName?: string; // New mutable "General Name"
   photoURL?: string;
+  bannerURL?: string;
   bio?: string;
   isAnonymous: boolean;
   // Social Stats

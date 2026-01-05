@@ -26,13 +26,15 @@ const App = () => {
 
   // Auth Form State
   const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
-  const [authEmail, setAuthEmail] = useState('');
+  const [loginIdentifier, setLoginIdentifier] = useState('');
+  const [registerEmail, setRegisterEmail] = useState('');
+  const [registerUsername, setRegisterUsername] = useState('');
   const [authPassword, setAuthPassword] = useState('');
-  const [authUsername, setAuthUsername] = useState('');
   const [authError, setAuthError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [registrationSuccess, setRegistrationSuccess] = useState(false);
-  const [usernameAvailabilityError, setUsernameAvailabilityError] = useState('');
+  const [usernameAvailability, setUsernameAvailability] = useState<'none' | 'checking' | 'available' | 'taken'>('none');
+  const [emailAvailability, setEmailAvailability] = useState<'none' | 'checking' | 'available' | 'taken'>('none');
 
   // Status Check
   const isMock = getIsMockMode();
@@ -41,7 +43,6 @@ const App = () => {
   useEffect(() => {
     // 1. Auth Subscription
     const unsub = subscribeToAuth(setUser);
-    loginAnonymously();
 
     // 2. Deep Link Check (Thread Sharing)
     const params = new URLSearchParams(window.location.search);
@@ -54,6 +55,15 @@ const App = () => {
 
     return () => unsub();
   }, []);
+
+  // Proactive Modal Closure & State Tracking
+  useEffect(() => {
+    console.log('APP_USER_STATE_CHANGED:', user?.uid || 'NONE');
+    if (user) {
+      console.log('User detected (', user.displayName, '), closing login modal');
+      setIsLoginOpen(false);
+    }
+  }, [user]);
 
   // Subscribe to messages globally if logged in
   useEffect(() => {
@@ -81,48 +91,82 @@ const App = () => {
   }, []);
 
   const resetAuthForm = () => {
-    setAuthEmail('');
+    setLoginIdentifier('');
+    setRegisterEmail('');
+    setRegisterUsername('');
     setAuthPassword('');
-    setAuthUsername('');
     setAuthError('');
-    setUsernameAvailabilityError('');
+    setUsernameAvailability('none');
+    setEmailAvailability('none');
     setRegistrationSuccess(false);
   };
 
+  // Debounced Username Check
+  useEffect(() => {
+    if (authMode !== 'register' || !registerUsername) {
+      setUsernameAvailability('none');
+      return;
+    }
+    setUsernameAvailability('checking');
+    const timer = setTimeout(async () => {
+      try {
+        const isAvailable = await checkUsernameAvailability(registerUsername);
+        setUsernameAvailability(isAvailable ? 'available' : 'taken');
+      } catch (err) {
+        console.error('Availability check failed:', err);
+        setUsernameAvailability('available'); // Fallback to avoid getting stuck
+      }
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [registerUsername, authMode]);
+
+  // Debounced Email Check (Domain restricted too)
+  useEffect(() => {
+    if (authMode !== 'register' || !registerEmail || !registerEmail.includes('@')) {
+      setEmailAvailability('none');
+      return;
+    }
+    setEmailAvailability('checking');
+    const timer = setTimeout(async () => {
+      // Basic check if email exists (we use a dedicated check if implemented)
+      // For now, assume it's available or it will fail on signup
+      setEmailAvailability('available');
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [registerEmail, authMode]);
+
   const handleAuth = async () => {
     setAuthError('');
-    setUsernameAvailabilityError('');
     try {
       if (authMode === 'login') {
-        if (!authEmail || !authPassword) {
+        if (!loginIdentifier || !authPassword) {
           setAuthError('Please fill in all fields.');
           return;
         }
-        // authEmail here acts as general identifier (email or username)
-        await loginUser(authEmail, authPassword);
-        setIsLoginOpen(false);
+        console.log('Login request initiated...');
+        await loginUser(loginIdentifier, authPassword);
+        console.log('loginUser call completed. Waiting for subscription to update state.');
+        // We DO NOT close the modal manually here. 
+        // The useEffect above will close it once 'user' is actually set to a non-null value.
         resetAuthForm();
       } else {
-        if (!authEmail || !authPassword || !authUsername) {
+        if (!registerEmail || !authPassword || !registerUsername) {
           setAuthError('All fields are required.');
           return;
         }
 
-        // --- EMAIL DOMAIN CHECK START ---
-        const domain = authEmail.split('@')[1]?.toLowerCase();
-        // Strict whitelist of major real providers
-        const allowedDomains = [
-          'gmail.com', 'googlemail.com',
-          'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
-          'yahoo.com', 'ymail.com',
-          'protonmail.com', 'proton.me',
-          'icloud.com', 'me.com', 'mac.com',
-          'tutamail.com', 'tutanota.com',
-          'yandex.ru', 'mail.ru',
-          'qq.com', '163.com'
-        ];
+        if (usernameAvailability === 'taken') {
+          setAuthError('Username is already taken.');
+          return;
+        }
 
-        // Also allow regional variations for the big ones if they start with the provider name
+        // --- EMAIL DOMAIN CHECK START ---
+        const domain = registerEmail.split('@')[1]?.toLowerCase();
+        const allowedDomains = [
+          'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+          'yahoo.com', 'ymail.com', 'protonmail.com', 'proton.me', 'icloud.com', 'me.com', 'mac.com',
+          'tutamail.com', 'tutanota.com', 'yandex.ru', 'mail.ru', 'qq.com', '163.com'
+        ];
         const isMajorProvider = allowedDomains.includes(domain) ||
           (domain && (
             (domain.startsWith('yahoo.') && domain !== 'yahoo.com') ||
@@ -131,25 +175,16 @@ const App = () => {
           ));
 
         if (!domain || !isMajorProvider) {
-          setAuthError('Registration restricted to major email providers (Gmail, Outlook, Yahoo, Proton, iCloud, etc.) to prevent spam.');
-          return;
-        }
-        // --- EMAIL DOMAIN CHECK END ---
-
-        // Check availability
-        const isAvailable = await checkUsernameAvailability(authUsername);
-        if (!isAvailable) {
-          setUsernameAvailabilityError('Username already exists. Please choose another.');
+          setAuthError('Please use a major email provider (Gmail, Outlook, Yahoo, etc.).');
           return;
         }
 
-        await registerUser(authEmail, authPassword, authUsername);
-        // Do not close modal, show success state instead
+        await registerUser(registerEmail, authPassword, registerUsername);
         setRegistrationSuccess(true);
       }
     } catch (e: any) {
       console.error(e);
-      setAuthError(e.message || 'Authentication failed. Please check details.');
+      setAuthError(e.message || 'Authentication failed.');
     }
   };
 
@@ -205,7 +240,7 @@ const App = () => {
               </div>
               <h3 className="font-serif font-bold text-xl">Confirm Your Email</h3>
               <p className="text-sm text-gray-600 max-w-xs">
-                We've sent a confirmation link to <span className="font-bold">{authEmail}</span>.
+                We've sent a confirmation link to <span className="font-bold">{registerEmail}</span>.
               </p>
               <div className="bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 rounded-md max-w-xs text-left">
                 <strong>Important:</strong> You must click the link in your email to activate your account before you can log in.
@@ -226,13 +261,13 @@ const App = () => {
               {/* Tabs */}
               <div className="flex border-b border-black mb-4">
                 <button
-                  onClick={() => { setAuthMode('login'); setAuthError(''); setUsernameAvailabilityError(''); }}
+                  onClick={() => { setAuthMode('login'); setAuthError(''); setUsernameAvailability('none'); }}
                   className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider ${authMode === 'login' ? 'bg-black text-white' : 'hover:bg-gray-100 text-gray-500'}`}
                 >
                   Login
                 </button>
                 <button
-                  onClick={() => { setAuthMode('register'); setAuthError(''); setUsernameAvailabilityError(''); }}
+                  onClick={() => { setAuthMode('register'); setAuthError(''); setUsernameAvailability('none'); }}
                   className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider ${authMode === 'register' ? 'bg-black text-white' : 'hover:bg-gray-100 text-gray-500'}`}
                 >
                   Register
@@ -243,30 +278,35 @@ const App = () => {
               <div className="space-y-3">
                 {authMode === 'register' && (
                   <div>
-                    <label className="text-[10px] font-bold uppercase block mb-1">Username (Visible Publicly)</label>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="text-[10px] font-bold uppercase block">Username (Locked after setup)</label>
+                      {usernameAvailability === 'checking' && <span className="text-[9px] text-gray-400 animate-pulse">CHECKING...</span>}
+                      {usernameAvailability === 'available' && <span className="text-[9px] text-green-600 font-bold uppercase italic">Available</span>}
+                      {usernameAvailability === 'taken' && <span className="text-[9px] text-red-600 font-bold uppercase italic">Taken</span>}
+                    </div>
                     <Input
                       placeholder="e.g. creative_mind"
-                      value={authUsername}
+                      value={registerUsername}
                       onChange={(e) => {
-                        // Only allow alphanumeric and underscore, limit length
                         const val = e.target.value.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 15);
-                        setAuthUsername(val);
-                        setUsernameAvailabilityError('');
+                        setRegisterUsername(val);
                       }}
                     />
-                    {usernameAvailabilityError && <div className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertCircle size={10} /> {usernameAvailabilityError}</div>}
+                    <p className="text-[9px] text-gray-400 mt-1 italic font-medium">⚠️ Choose carefully! This will be your permanent ID and cannot be changed later.</p>
                   </div>
                 )}
 
                 <div>
-                  <label className="text-[10px] font-bold uppercase block mb-1">
-                    {authMode === 'login' ? 'Email or Username' : 'Email Address'}
-                  </label>
+                  <div className="flex justify-between items-center mb-1">
+                    <label className="text-[10px] font-bold uppercase block">
+                      {authMode === 'login' ? 'Email Address' : 'Email Address'}
+                    </label>
+                  </div>
                   <Input
-                    type={authMode === 'login' ? 'text' : 'email'}
-                    placeholder={authMode === 'login' ? 'username or name@example.com' : 'name@example.com'}
-                    value={authEmail}
-                    onChange={e => setAuthEmail(e.target.value)}
+                    type="email"
+                    placeholder="name@example.com"
+                    value={authMode === 'login' ? loginIdentifier : registerEmail}
+                    onChange={e => authMode === 'login' ? setLoginIdentifier(e.target.value) : setRegisterEmail(e.target.value)}
                   />
                 </div>
 

@@ -12,6 +12,46 @@
     href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400&display=swap"
     rel="stylesheet">
   <script>
+    // Storage Quota Guard
+    (function () {
+      try {
+        // 1. Proactive cleanup of old mock data if it exists
+        const keysToRemove = ['mock_posts', 'mock_messages', 'mock_notifications', 'mock_spaces'];
+        keysToRemove.forEach(k => {
+          if (localStorage.getItem(k)) {
+            console.log('Cleaning up old mock data for space efficiency:', k);
+            localStorage.removeItem(k);
+          }
+        });
+
+        // 2. Wrap setItem to handle quota errors gracefully
+        const originalSetItem = localStorage.setItem;
+        localStorage.setItem = function (key, value) {
+          try {
+            originalSetItem.apply(this, arguments);
+          } catch (e) {
+            if (e.name === 'QuotaExceededError' || e.name === 'NS_ERROR_DOM_QUOTA_REACHED') {
+              console.warn('STORAGE_QUOTA_EXCEEDED! Attempting emergency cleanup...');
+              // Clear ONLY half of the Supabase keys to see if it helps, or clear all if desperate
+              for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && (k.includes('supabase') || k.includes('sb-'))) {
+                  console.log('Emergency removal of storage key:', k);
+                  localStorage.removeItem(k);
+                }
+              }
+              // Try again once
+              originalSetItem.apply(this, arguments);
+            } else {
+              throw e;
+            }
+          }
+        };
+      } catch (err) {
+        console.error('Storage Guard caught error:', err);
+      }
+    })();
+
     tailwind.config = {
       theme: {
         extend: {

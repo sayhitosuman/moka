@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MessageSquare, ArrowBigUp, ArrowBigDown, Share2, User, Search, X, Settings, LogOut, Edit2, Trash2, Camera, Users, UserPlus, UserMinus, UserCheck, ChevronLeft, Send, ShieldCheck, Activity, MessageCircle, Menu, Filter, Image as ImageIcon, Paperclip, Loader, Copy, Download, Plus, Minimize2, Layout, PlaySquare, Compass, Heart, Bell, Check, Info } from 'lucide-react';
 import { UserProfile, Comment, Space, AppNotification } from '../types';
 import {
-  subscribeToStream, postThought, votePost, updateUserProfile, deletePost, getPublicUserProfile, sendFriendRequest, acceptFriendRequest, declineFriendRequest, unfriend, fetchUserNetwork, fetchSpaces, createSpace, subscribeToNotifications, markNotificationRead, fetchNotifications, globalSearch, SearchResult, fetchIsMember, joinSpace, leaveSpace, fetchUserSpaces, fetchSpaceMembers, updateSpace, respondToSpaceRequest, giveAdminRole, fetchSpaceMembership, fetchPendingMembers, subscribeToFeed, uploadMedia, removeMember
+  subscribeToStream, postThought, votePost, updateUserProfile, deletePost, getPublicUserProfile, sendFriendRequest, acceptFriendRequest, declineFriendRequest, unfriend, fetchUserNetwork, fetchSpaces, createSpace, subscribeToNotifications, markNotificationRead, fetchNotifications, globalSearch, SearchResult, fetchIsMember, joinSpace, leaveSpace, fetchUserSpaces, fetchSpaceMembers, updateSpace, respondToSpaceRequest, giveAdminRole, fetchSpaceMembership, fetchPendingMembers, subscribeToFeed, uploadMedia, removeMember, fetchUserPosts
 } from '../services/store';
 import { Window, Button, Input, Modal, THEME } from '../components/UI';
 import { toBlob } from 'html-to-image';
@@ -385,74 +385,95 @@ export const UserProfileModal = ({
 }) => {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('overview');
+  const [activeTab, setActiveTab] = useState('posts');
 
-  // Edit State
+  const [userPosts, setUserPosts] = useState<Comment[]>([]);
+  const [userSpaces, setUserSpaces] = useState<Space[]>([]);
+
   const [isEditing, setIsEditing] = useState(false);
   const [editBio, setEditBio] = useState('');
   const [editPhoto, setEditPhoto] = useState('');
+  const [editBanner, setEditBanner] = useState('');
   const [editFullName, setEditFullName] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const bannerInputRef = useRef<HTMLInputElement>(null);
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [bannerFile, setBannerFile] = useState<File | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Network (Followers/Following) State
   const [networkList, setNetworkList] = useState<UserProfile[]>([]);
   const [networkType, setNetworkType] = useState<'followers' | 'following' | 'friends' | null>(null);
 
-  // Determine if viewing own profile
   const isOwnProfile = currentUser && targetUserId === currentUser.uid;
 
   useEffect(() => {
     const fetchProfileData = async () => {
-      if (!targetUserId) return;
+      try {
+        if (!targetUserId) return;
+        if (!profile || profile.uid !== targetUserId) setLoading(true);
+        setNetworkType(null);
 
-      // Only show spinner if we don't have this profile yet or it's a new target
-      if (!profile || profile.uid !== targetUserId) {
-        setLoading(true);
-      }
+        const [data, posts, spaces] = await Promise.all([
+          getPublicUserProfile(targetUserId, currentUser?.uid).catch(() => null),
+          fetchUserPosts(targetUserId, currentUser?.uid).catch(() => []),
+          fetchUserSpaces(targetUserId).catch(() => [])
+        ]);
 
-      setNetworkType(null); // Reset network view on profile change
+        if (data) {
+          setProfile(data);
+          setUserPosts(posts);
+          setUserSpaces(spaces);
+        } else if (isOwnProfile && currentUser) {
+          // Fallback to currentUser info if document doesn't exist (e.g. anonymous or fresh signup)
+          setProfile(currentUser);
+          setUserPosts([]);
+          setUserSpaces([]);
+        } else {
+          setProfile(null);
+        }
 
-      // If viewing self, use current user data initially
-      if (currentUser && targetUserId === currentUser.uid) {
-        setProfile({ ...currentUser }); // Copy to allow local mutation checks
-        setEditBio(currentUser.bio || "Just another creative soul wandering the digital garden.");
-        setEditPhoto(currentUser.photoURL || "");
-        setEditFullName(currentUser.fullName || currentUser.displayName);
-
-        // Fetch stats specifically
-        const fullProfile = await getPublicUserProfile(targetUserId, currentUser.uid);
-        if (fullProfile) setProfile(fullProfile); // Update with stats
-
+        if (isOwnProfile && currentUser) {
+          const base = data || currentUser;
+          setEditBio(base.bio || "");
+          setEditPhoto(base.photoURL || "");
+          setEditBanner(base.bannerURL || "");
+          setEditFullName(base.fullName || base.displayName || "");
+        }
+      } catch (err) {
+        console.error("Profile fetch error:", err);
+      } finally {
         setLoading(false);
-        return;
       }
-
-      // Fetch other user
-      const data = await getPublicUserProfile(targetUserId, currentUser?.uid);
-      setProfile(data);
-      setLoading(false);
     };
 
-    if (isOpen) {
-      // Check if we already have the profile for this target to prevent flicker
-      if (!profile || profile.uid !== targetUserId) {
-        fetchProfileData();
-      } else {
-        // If profile exists but we just opened it, maybe refresh stats silently
-        fetchProfileData();
-      }
-    }
+    if (isOpen) fetchProfileData();
   }, [isOpen, targetUserId, currentUser?.uid]);
 
   const handleSaveProfile = async () => {
+    setIsSaving(true);
     try {
-      await updateUserProfile(editPhoto, editBio, editFullName);
+      let finalPhoto = editPhoto;
+      let finalBanner = editBanner;
+
+      if (photoFile) {
+        const url = await uploadMedia(photoFile);
+        if (url) finalPhoto = url;
+      }
+      if (bannerFile) {
+        const url = await uploadMedia(bannerFile);
+        if (url) finalBanner = url;
+      }
+
+      await updateUserProfile(finalPhoto, editBio, editFullName, finalBanner);
       setIsEditing(false);
-      // Refresh local profile state
-      setProfile(prev => prev ? ({ ...prev, photoURL: editPhoto, bio: editBio, fullName: editFullName }) : null);
+      setProfile(prev => prev ? ({ ...prev, photoURL: finalPhoto, bannerURL: finalBanner, bio: editBio, fullName: editFullName }) : null);
+      setPhotoFile(null);
+      setBannerFile(null);
     } catch (e) {
       console.error(e);
       alert("Failed to update profile");
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -460,287 +481,336 @@ export const UserProfileModal = ({
     if (!currentUser || !profile) return;
     try {
       if (profile.friendStatus === 'friends') {
-        if (!window.confirm(`Are you absolutely sure you want to remove #${profile.displayName} from your friends?`)) return;
+        if (!window.confirm(`Remove #${profile.displayName} from your friends?`)) return;
         await unfriend(currentUser.uid, profile.uid);
-        setProfile({
-          ...profile,
-          friendStatus: 'none',
-          friendCount: (profile.friendCount || 0) - 1
-        });
+        setProfile({ ...profile, friendStatus: 'none', friendCount: (profile.friendCount || 0) - 1 });
       } else if (profile.friendStatus === 'pending_sent') {
-        await unfriend(currentUser.uid, profile.uid); // Also works to cancel
+        await unfriend(currentUser.uid, profile.uid);
         setProfile({ ...profile, friendStatus: 'none' });
       } else if (profile.friendStatus === 'pending_received') {
         await acceptFriendRequest(currentUser.uid, profile.uid);
-        setProfile({
-          ...profile,
-          friendStatus: 'friends',
-          friendCount: (profile.friendCount || 0) + 1
-        });
+        setProfile({ ...profile, friendStatus: 'friends', friendCount: (profile.friendCount || 0) + 1 });
       } else {
         await sendFriendRequest(currentUser.uid, profile.uid);
         setProfile({ ...profile, friendStatus: 'pending_sent' });
       }
-    } catch (e: any) {
-      console.error("Friend action error:", e);
-      alert(`Error: ${e.message || 'Failed to perform friend action. Please check the console for details.'}`);
-    }
+    } catch (e: any) { console.error(e); }
   };
 
-  const handleDeletePost = async (id: string, e: React.MouseEvent) => {
+  const handleDeleteUserPost = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm("Are you sure you want to delete this post?")) {
-      onDeletePost(id);
+    if (window.confirm("Delete post?")) {
+      await onDeletePost(id);
+      setUserPosts(prev => prev.filter(p => p.id !== id));
     }
   };
 
   const handleViewNetwork = async (type: 'followers' | 'following' | 'friends') => {
     if (!profile) return;
     setNetworkType(type);
-    setNetworkList([]); // Clear previous
+    setNetworkList([]);
     const list = await fetchUserNetwork(profile.uid, type);
     setNetworkList(list);
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const ctx = canvas.getContext('2d');
-          const MAX_SIZE = 120;
-          let width = img.width;
-          let height = img.height;
-
-          if (width > height) {
-            if (width > MAX_SIZE) { height *= MAX_SIZE / width; width = MAX_SIZE; }
-          } else {
-            if (height > MAX_SIZE) { width *= MAX_SIZE / height; height = MAX_SIZE; }
-          }
-          canvas.width = width;
-          canvas.height = height;
-          ctx?.drawImage(img, 0, 0, width, height);
-          setEditPhoto(canvas.toDataURL('image/jpeg', 0.7));
-        };
-        img.src = event.target?.result as string;
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
   if (!isOpen) return null;
 
+  const normalPosts = userPosts.filter(p => p.mediaType !== 'video');
+  const blinks = userPosts.filter(p => p.mediaType === 'video');
+  const groups = userSpaces.filter(s => s.type === 'group');
+  const pages = userSpaces.filter(s => s.type === 'page');
+
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={loading ? "Loading..." : `User: #${profile?.displayName}`}>
-      {!profile || loading ? (
-        <div className="h-[300px] flex items-center justify-center">
-          <div className="animate-spin w-8 h-8 border-2 border-black border-t-transparent rounded-full"></div>
+    <Modal isOpen={isOpen} onClose={onClose} title={loading ? "DATA_LINK..." : `PROFILE: #${profile?.displayName || 'USER'}`} maxWidth="max-w-4xl">
+      {loading ? (
+        <div className="h-[400px] flex flex-col items-center justify-center gap-4 bg-white">
+          <div className="w-12 h-12 border-4 border-black border-t-transparent animate-spin"></div>
+          <span className="text-[10px] font-black tracking-widest text-black uppercase">SYNCING_NODE_DATA</span>
+        </div>
+      ) : !profile ? (
+        <div className="h-[400px] flex flex-col items-center justify-center gap-4 bg-white">
+          <span className="text-xs font-black uppercase tracking-widest text-gray-400">NODE_NOT_FOUND_OR_SYNC_ERROR</span>
         </div>
       ) : (
-        <div className="flex flex-col h-[60vh]">
+        <div className="flex flex-col h-[80vh] bg-white border-t border-black overflow-hidden relative">
           {networkType ? (
-            // --- NETWORK VIEW (Followers/Following List) ---
             <div className="flex flex-col h-full bg-white">
-              <div className="p-2 border-b border-black flex items-center gap-2 bg-gray-50">
-                <Button onClick={() => setNetworkType(null)} className="px-2 py-1"><ChevronLeft size={14} /></Button>
-                <span className="font-bold text-sm uppercase">{networkType}</span>
+              <div className="p-4 border-b-2 border-black flex items-center gap-4 bg-[#a6cade]">
+                <button onClick={() => setNetworkType(null)} className="p-1 px-2 border-2 border-black bg-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none font-black text-xs">BACK</button>
+                <span className="font-black text-xs uppercase tracking-widest">NETWORK: {networkType}</span>
               </div>
-              <div className="flex-1 overflow-y-auto p-2 space-y-2">
+              <div className="flex-1 overflow-y-auto p-4 space-y-3">
                 {networkList.length > 0 ? networkList.map(u => (
-                  <div key={u.uid} onClick={() => onNavigate(u.uid)} className="flex items-center gap-3 p-3 border border-gray-200 hover:bg-gray-50 cursor-pointer">
-                    <div className="w-10 h-10 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold">
+                  <div key={u.uid} onClick={() => onNavigate(u.uid)} className="flex items-center gap-4 p-4 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-gray-50 cursor-pointer group">
+                    <div className="w-12 h-12 bg-black border-2 border-black overflow-hidden text-white flex items-center justify-center font-black">
                       {u.photoURL ? <img src={u.photoURL} alt="avi" className="w-full h-full object-cover" /> : u.displayName[0]}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-bold text-sm">{u.fullName || u.displayName}</div>
-                      <div className="text-xs text-gray-500">#{u.displayName}</div>
+                    <div className="flex-1">
+                      <div className="font-black text-sm uppercase tracking-tight">{u.fullName || u.displayName}</div>
+                      <div className="text-[10px] font-black text-gray-400">#{u.displayName}</div>
                     </div>
-                    {isOwnProfile && (
-                      <button
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          if (window.confirm(`Remove #${u.displayName} from your ${networkType}?`)) {
-                            await unfriend(currentUser.uid, u.uid);
-                            setNetworkList(prev => prev.filter(item => item.uid !== u.uid));
-                          }
-                        }}
-                        className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
+                    <button className="p-2 border-2 border-black bg-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] font-black text-[10px]">VIEW</button>
                   </div>
                 )) : (
-                  <div className="p-4 text-center text-gray-400 italic">No users found.</div>
+                  <div className="h-40 flex items-center justify-center text-black font-black uppercase text-xs border-2 border-dashed border-black">
+                    EMPTY_NETWORK_STATUS
+                  </div>
                 )}
               </div>
             </div>
           ) : (
             <>
-              {/* --- MAIN PROFILE VIEW --- */}
-              {/* Header */}
-              <div className="flex items-center gap-4 p-4 border-b border-black bg-gray-50">
-                <div className="relative">
-                  <div className="w-20 h-20 bg-black text-white rounded-full flex items-center justify-center text-3xl font-bold border-2 border-white shadow-md overflow-hidden relative group">
-                    {(isEditing ? editPhoto : profile.photoURL) ? (
-                      <img src={isEditing ? editPhoto : profile.photoURL} alt="avi" className="w-full h-full object-cover" />
-                    ) : (
-                      profile.displayName ? profile.displayName[0] : '?'
-                    )}
-                    {isEditing && (
-                      <div
-                        onClick={() => fileInputRef.current?.click()}
-                        className="absolute inset-0 bg-black/50 flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
-                      >
-                        <Camera size={20} className="text-white" />
-                      </div>
+              {/* BANNER SECTION */}
+              <div className="relative h-32 md:h-40 shrink-0 border-b-2 border-black bg-[#d1b8d6] overflow-hidden group">
+                {(isEditing ? editBanner : profile.bannerURL) ? (
+                  <img src={isEditing ? editBanner : profile.bannerURL} alt="banner" className="w-full h-full object-cover" />
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center opacity-20">
+                    <div className="grid grid-cols-4 gap-4">
+                      {[1, 2, 3, 4, 5, 6, 7, 8].map(i => <div key={i} className="w-1 h-1 bg-black rounded-full"></div>)}
+                    </div>
+                  </div>
+                )}
+                {isEditing && (
+                  <button onClick={() => bannerInputRef.current?.click()} className="absolute inset-0 bg-black/50 text-white font-black text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity gap-2 uppercase tracking-widest">
+                    <ImageIcon size={16} /> SET_WALLPAPER
+                  </button>
+                )}
+                <input type="file" ref={bannerInputRef} className="hidden" accept="image/*" onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    setBannerFile(file);
+                    const r = new FileReader();
+                    r.onload = (ev) => setEditBanner(ev.target?.result as string);
+                    r.readAsDataURL(file);
+                  }
+                }} />
+              </div>
+
+              {/* HEADER: Blocky Neubrutalist */}
+              <div className="relative p-6 pt-0 border-b-2 border-black bg-[#f4f4f5]">
+                <div className="flex flex-col md:flex-row items-center md:items-start gap-8 -mt-12">
+                  {/* HEX PHOTO */}
+                  <div className="relative shrink-0">
+                    <div className="w-32 h-32 bg-white border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] overflow-hidden relative group">
+                      {(isEditing ? editPhoto : profile.photoURL) ? (
+                        <img src={isEditing ? editPhoto : profile.photoURL} alt="avi" className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center text-4xl font-black bg-black text-white">{profile.displayName[0]}</div>
+                      )}
+                      {isEditing && (
+                        <button onClick={() => fileInputRef.current?.click()} className="absolute inset-0 bg-black/70 text-white font-black text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">UPDATE_MEDIA</button>
+                      )}
+                    </div>
+                    <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) {
+                        setPhotoFile(file);
+                        const r = new FileReader();
+                        r.onload = (ev) => setEditPhoto(ev.target?.result as string);
+                        r.readAsDataURL(file);
+                      }
+                    }} />
+                    {!isOwnProfile && profile.friendStatus === 'friends' && (
+                      <div className="absolute -bottom-2 -right-2 bg-[#b8d6c6] border-2 border-black px-2 py-0.5 text-[8px] font-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]">TRUSTED_CONTACT</div>
                     )}
                   </div>
-                  <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleImageUpload} />
-                </div>
 
-                <div className="flex-1">
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <h2 className="text-2xl font-bold font-serif">{profile.fullName || profile.displayName}</h2>
-                      <div className="text-xs text-gray-500 font-mono mb-2 flex items-center gap-1">
-                        #{profile.displayName}
+                  {/* PROFILE INFO */}
+                  <div className="flex-1 text-center md:text-left">
+                    <div className="mb-4">
+                      <h2 className="text-3xl font-black uppercase tracking-tighter text-black mb-1">{profile.fullName || profile.displayName}</h2>
+                      <div className="flex flex-wrap justify-center md:justify-start gap-2">
+                        <span className="px-2 py-0.5 border-2 border-black bg-white text-[9px] font-black tracking-widest uppercase">NODE: #{profile.displayName}</span>
+                        {isOwnProfile && <span className="px-2 py-0.5 border-2 border-black bg-black text-white text-[9px] font-black tracking-widest uppercase italic">ROOT_USER</span>}
                       </div>
                     </div>
 
+                    <div className="flex flex-wrap justify-center md:justify-start gap-6">
+                      <button onClick={() => handleViewNetwork('friends')} className="bg-white border-2 border-black px-3 py-1 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none hover:bg-gray-50 flex items-center gap-2">
+                        <Users size={14} strokeWidth={3} />
+                        <span className="text-[10px] font-black uppercase tracking-widest">{profile.friendCount || 0} FRIENDS</span>
+                      </button>
+                      <div className="bg-white border-2 border-black px-3 py-1 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] flex items-center gap-2">
+                        <Activity size={14} strokeWidth={3} />
+                        <span className="text-[10px] font-black uppercase tracking-widest">{userPosts.length} CONTRIBUTIONS</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ACTIONS */}
+                  <div className="flex flex-col gap-2 shrink-0">
                     {isOwnProfile ? (
                       !isEditing ? (
-                        <Button onClick={() => setIsEditing(true)} className="flex items-center gap-1 px-2 py-1">
-                          <Edit2 size={12} /> Edit Profile
-                        </Button>
+                        <button onClick={() => setIsEditing(true)} className="px-6 py-3 bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none font-black text-xs uppercase tracking-widest flex items-center gap-2"><Edit2 size={14} strokeWidth={3} /> EDIT_UI</button>
                       ) : (
                         <div className="flex gap-2">
-                          <Button onClick={() => setIsEditing(false)}>Cancel</Button>
-                          <Button onClick={handleSaveProfile} variant="primary">Save</Button>
+                          <button onClick={() => setIsEditing(false)} className="px-4 py-3 bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none font-black text-xs uppercase tracking-widest">CANCEL</button>
+                          <button onClick={handleSaveProfile} disabled={isSaving} className="px-4 py-3 bg-[#b8d6c6] border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none font-black text-xs uppercase tracking-widest disabled:opacity-50">
+                            {isSaving ? 'UPLOADING...' : 'SAVE_NODE'}
+                          </button>
                         </div>
                       )
                     ) : (
-                      <div className="flex gap-2">
-                        <Button
-                          onClick={() => onChat(profile.uid)}
-                          className="flex items-center gap-2"
-                        // Allow chat even if not logged in (will trigger login)
-                        >
-                          <MessageCircle size={14} /> Message
-                        </Button>
-                        <Button
-                          onClick={handleFriendAction}
-                          variant={profile.friendStatus === 'friends' ? 'default' : 'primary'}
-                          className="flex items-center gap-2"
-                          disabled={!currentUser}
-                        >
-                          {profile.friendStatus === 'friends' && <><Trash2 size={14} /> REMOVE FRIEND</>}
-                          {profile.friendStatus === 'pending_sent' && <><Loader size={12} className="animate-spin" /> SENT (PENDING)</>}
-                          {profile.friendStatus === 'pending_received' && <><Check size={14} /> Accept Request</>}
-                          {profile.friendStatus === 'none' && <><UserPlus size={14} /> Add Friend</>}
-                        </Button>
+                      <div className="flex flex-col gap-2">
+                        <button onClick={() => onChat(profile.uid)} className="px-6 py-3 bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none font-black text-xs uppercase tracking-widest flex items-center gap-2"><MessageCircle size={14} strokeWidth={3} /> SEND_MESSAGE</button>
+                        <button onClick={handleFriendAction} className={`px-6 py-3 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none font-black text-xs uppercase tracking-widest flex items-center gap-2 ${profile.friendStatus === 'friends' ? 'bg-[#d1b8d6]' : 'bg-[#a6cade]'}`}>
+                          {profile.friendStatus === 'friends' ? <><UserCheck size={14} strokeWidth={3} /> NODE_LINKED</> : profile.friendStatus === 'pending_sent' ? <><Loader size={12} className="animate-spin" /> SYNCING...</> : <><UserPlus size={14} strokeWidth={3} /> LINK_NODE</>}
+                        </button>
                       </div>
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* Stats Bar (Clickable) */}
-              <div className="grid grid-cols-2 border-b border-black text-center divide-x divide-gray-200">
-                <div className="p-2 bg-gray-50">
-                  <div className="font-bold">{thoughts.filter(t => t.authorId === profile.uid).length}</div>
-                  <div className="text-[10px] text-gray-500 uppercase">Posts</div>
-                </div>
-                <div className="p-2 bg-gray-50 cursor-pointer hover:bg-gray-100 transition-colors" onClick={() => handleViewNetwork('friends')}>
-                  <div className="font-bold">{profile.friendCount || 0}</div>
-                  <div className="text-[10px] text-gray-500 uppercase">Friends</div>
-                </div>
-              </div>
-
-              {/* Edit Inputs */}
-              {isEditing && (
-                <div className="p-4 bg-yellow-50 border-b border-black space-y-3 animate-fade-in">
-                  <div>
-                    <label className="text-[10px] font-bold uppercase block mb-1">Display Name</label>
-                    <Input value={editFullName} onChange={e => setEditFullName(e.target.value)} />
-                  </div>
-                  <div>
-                    <label className="text-[10px] font-bold uppercase block mb-1">Bio</label>
-                    <Input value={editBio} onChange={e => setEditBio(e.target.value)} />
-                  </div>
+              {/* BIO / EDITING AREA */}
+              {(isEditing || profile.bio) && (
+                <div className="p-6 bg-white border-b-2 border-black">
+                  {isEditing ? (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="text-[10px] font-black uppercase tracking-widest mb-1 block opacity-50">DISPLAY_TITLE</label>
+                        <input value={editFullName} onChange={e => setEditFullName(e.target.value)} className="w-full bg-[#f4f4f5] border-2 border-black p-3 font-mono text-sm focus:outline-none" />
+                      </div>
+                      <div>
+                        <label className="text-[10px] font-black uppercase tracking-widest mb-1 block opacity-50">NODE_DESCRIPTION</label>
+                        <textarea value={editBio} onChange={e => setEditBio(e.target.value)} className="w-full bg-[#f4f4f5] border-2 border-black p-3 font-mono text-sm focus:outline-none min-h-[80px]" />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex gap-4 items-start">
+                      <div className="p-2 border-2 border-black bg-black text-white shrink-0"><Info size={16} /></div>
+                      <p className="text-sm font-black italic tracking-tight leading-snug">"{profile.bio}"</p>
+                    </div>
+                  )}
                 </div>
               )}
 
-              {/* Tabs */}
-              <div className="flex border-b border-black">
-                {['overview', 'posts', 'settings'].map(tab => {
-                  if (tab === 'settings' && !isOwnProfile) return null;
-                  return (
-                    <button
-                      key={tab}
-                      onClick={() => setActiveTab(tab)}
-                      className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider hover:bg-gray-100 transition-colors ${activeTab === tab ? 'bg-black text-white hover:bg-black' : ''}`}
-                    >
-                      {tab}
-                    </button>
-                  );
-                })}
+              {/* TABS: Neubrutalist Bottom Borders */}
+              <div className="flex bg-white border-b-2 border-black overflow-x-auto no-scrollbar">
+                {[
+                  { id: 'posts', label: 'THREADS', count: normalPosts.length, icon: MessageSquare },
+                  { id: 'blinks', label: 'BLINKS', count: blinks.length, icon: PlaySquare },
+                  { id: 'groups', label: 'SPACES', count: groups.length, icon: Users },
+                  { id: 'pages', label: 'DOMAINS', count: pages.length, icon: Layout },
+                  ...(isOwnProfile ? [{ id: 'settings', label: 'SECURITY', icon: ShieldCheck }] : [])
+                ].map(tab => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setActiveTab(tab.id)}
+                    className={`flex-1 py-4 px-4 text-[10px] font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 border-r last:border-r-0 border-black ${activeTab === tab.id ? 'bg-black text-white' : 'hover:bg-[#f4f4f5]'}`}
+                  >
+                    <tab.icon size={12} strokeWidth={3} />
+                    {tab.label} [{tab.count || 0}]
+                  </button>
+                ))}
               </div>
 
-              {/* Tab Content */}
-              <div className="flex-1 overflow-y-auto p-4 bg-white">
-                {activeTab === 'overview' && (
-                  <div className="space-y-4">
-                    <div className="bg-white border border-black p-4">
-                      <h3 className="font-bold text-sm mb-2">About</h3>
-                      <p className="text-sm text-gray-600 italic">"{profile.bio || "Just another creative soul wandering the digital garden."}"</p>
-                    </div>
-                  </div>
-                )}
-
+              {/* TAB CONTENT: Scrollable */}
+              <div className="flex-1 overflow-y-auto p-6 bg-[#f4f4f5]">
                 {activeTab === 'posts' && (
-                  <div className="space-y-2">
-                    {thoughts.filter(t => t.authorId === profile.uid).map((p: Comment) => (
-                      <div
-                        key={p.id}
-                        onClick={() => onOpenThread(p.id)}
-                        className="p-3 border border-gray-200 hover:bg-gray-50 flex justify-between items-center group cursor-pointer"
-                      >
-                        <div className="flex-1">
-                          <div className="text-[10px] text-gray-400 mb-1">{new Date(p.createdAt?.toDate ? p.createdAt.toDate() : p.createdAt).toLocaleDateString()}</div>
-                          <div className="font-bold text-sm mb-1">{p.title || p.text.substring(0, 50) + '...'}</div>
-                          <div className="text-xs text-gray-500 flex items-center gap-1"><ArrowBigUp size={12} /> {p.likes}</div>
+                  <div className="space-y-4">
+                    {normalPosts.length > 0 ? normalPosts.map(p => (
+                      <div key={p.id} onClick={() => onOpenThread(p.id)} className="p-4 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-[#fffcf0] transition-colors cursor-pointer group relative">
+                        <div className="flex justify-between items-center mb-3">
+                          <span className="text-[9px] font-black uppercase tracking-widest opacity-40">{formatDate(p.createdAt)}</span>
+                          {isOwnProfile && <button onClick={(e) => handleDeleteUserPost(p.id, e)} className="p-1 border border-black bg-white hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={12} /></button>}
                         </div>
-                        {isOwnProfile && (
-                          <button
-                            onClick={(e) => handleDeletePost(p.id, e)}
-                            className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors"
-                            title="Delete Post"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        )}
+                        <div className="flex gap-4">
+                          {p.mediaUrl && <div className="w-16 h-16 border-2 border-black shrink-0 overflow-hidden bg-gray-100"><img src={p.mediaUrl} className="w-full h-full object-cover" alt="m" /></div>}
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-black text-sm uppercase mb-1 truncate">{p.title || "UNTITLED_THREAD"}</h4>
+                            <p className="text-xs font-bold text-gray-600 line-clamp-2 leading-tight">{p.text}</p>
+                          </div>
+                        </div>
                       </div>
-                    ))}
+                    )) : (
+                      <div className="h-40 flex items-center justify-center border-2 border-black border-dashed font-black text-[10px] uppercase">NULL_CONTENT_STATUS</div>
+                    )}
                   </div>
                 )}
 
-                {activeTab === 'settings' && isOwnProfile && (
-                  <div className="space-y-6 max-w-sm mx-auto pt-4">
-                    <div>
-                      <label className="text-[10px] font-bold uppercase text-gray-500 block mb-1">Username (Handle)</label>
-                      <div className="flex gap-2 items-center bg-gray-100 p-2 border border-gray-300">
-                        <User size={14} className="text-gray-400" />
-                        <span className="text-sm font-mono text-gray-600 flex-1">{profile.displayName}</span>
-                        <span className="text-[10px] text-red-500 font-bold border border-red-200 bg-red-50 px-1">LOCKED</span>
+                {activeTab === 'blinks' && (
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    {blinks.length > 0 ? blinks.map(b => (
+                      <div key={b.id} onClick={() => onOpenThread(b.id)} className="aspect-[9/16] border-2 border-black bg-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] relative group cursor-pointer overflow-hidden active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all">
+                        <video src={b.mediaUrl} className="w-full h-full object-cover opacity-70 group-hover:opacity-100 transition-opacity" />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-60"></div>
+                        <div className="absolute bottom-2 left-2 right-2">
+                          <p className="text-[10px] font-black text-white line-clamp-2 uppercase leading-none mb-1">{b.text}</p>
+                          <span className="text-[8px] font-black text-white/50 bg-black/50 px-1 py-0.5 border border-white/20">VOTES: {b.likes}</span>
+                        </div>
                       </div>
+                    )) : (
+                      <div className="col-span-full h-40 flex items-center justify-center border-2 border-black border-dashed font-black text-[10px] uppercase">NULL_VIDEO_NODES</div>
+                    )}
+                  </div>
+                )}
+
+                {activeTab === 'groups' && (
+                  <div className="space-y-4">
+                    {groups.length > 0 ? groups.map(s => (
+                      <div key={s.id} onClick={() => { onClose(); onNavigate(s.id); }} className="p-4 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex items-center gap-4 hover:bg-[#f0f9ff] cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all">
+                        <div className="w-14 h-14 border-2 border-black shrink-0 overflow-hidden bg-[#a6cade]">
+                          {s.avatarURL ? <img src={s.avatarURL} alt="s" className="w-full h-full object-cover" /> : <Users className="w-full h-full p-3 text-black" />}
+                        </div>
+                        <div className="flex-1">
+                          <h4 className="font-black text-sm uppercase">{s.name}</h4>
+                          <p className="text-[10px] font-black text-gray-500 tracking-wider truncate mb-2">{s.handle}</p>
+                          <div className="inline-block px-2 py-0.5 border border-black bg-white text-[8px] font-black uppercase tracking-widest">{s.memberCount} MEMBERS</div>
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="h-40 flex items-center justify-center border-2 border-black border-dashed font-black text-[10px] uppercase">NO_SPACES_JOINED</div>
+                    )}
+                  </div>
+                )}
+
+                {activeTab === 'pages' && (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {pages.length > 0 ? pages.map(s => (
+                      <div key={s.id} onClick={() => { onClose(); onNavigate(s.id); }} className="p-5 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col hover:bg-[#fdf2ff] cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all">
+                        <div className="flex items-center gap-3 mb-4">
+                          <div className="w-10 h-10 border-2 border-black bg-[#d1b8d6] flex items-center justify-center font-black">{s.avatarURL ? <img src={s.avatarURL} className="w-full h-full object-cover" /> : s.name[0]}</div>
+                          <div className="min-w-0 flex-1">
+                            <h4 className="font-black text-xs uppercase truncate">{s.name}</h4>
+                            <span className="text-[9px] font-black text-gray-400">{s.handle}</span>
+                          </div>
+                        </div>
+                        <p className="text-[10px] font-black text-gray-600 line-clamp-2 mb-4">DESC://{s.description || "DEFAULT_DOMAIN_ID"}</p>
+                        <div className="mt-auto pt-3 border-t border-black/10 flex justify-between items-center text-[9px] font-black uppercase tracking-widest">
+                          <span>FOLLOWERS: {s.followerCount}</span>
+                          <button className="bg-black text-white px-2 py-1">ENTER</button>
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="col-span-full h-40 flex items-center justify-center border-2 border-black border-dashed font-black text-[10px] uppercase">NO_DOMAINS_FOLLOWED</div>
+                    )}
+                  </div>
+                )}
+
+                {activeTab === 'settings' && (
+                  <div className="max-w-md mx-auto py-8">
+                    <div className="p-8 border-4 border-black bg-white shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] space-y-8">
+                      <div className="text-center font-black space-y-2 uppercase">
+                        <ShieldCheck size={40} className="mx-auto" strokeWidth={3} />
+                        <h3 className="text-xl tracking-tighter">SECURITY_PROTOCOL</h3>
+                      </div>
+                      <div className="space-y-4">
+                        <div className="p-4 border-2 border-black bg-[#f4f4f5]">
+                          <label className="text-[10px] font-black uppercase block opacity-40 mb-1">GARDEN_ID</label>
+                          <div className="flex items-center justify-between font-mono font-black text-sm">
+                            <span>#{profile.displayName}</span>
+                            <span className="text-[10px] border border-black px-2 bg-white">LOCKED</span>
+                          </div>
+                        </div>
+                        <div className="p-4 border-2 border-black bg-[#f4f4f5]">
+                          <label className="text-[10px] font-black uppercase block opacity-40 mb-1">SESSION_AUTH</label>
+                          <div className="font-mono font-black text-[10px] tracking-widest">{currentUser?.isAnonymous ? "LEVEL: GUEST" : "LEVEL: AUTHENTICATED"}</div>
+                        </div>
+                      </div>
+                      <button onClick={onLogout} className="w-full py-4 bg-black text-white border-4 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-black text-xs tracking-[0.2em] uppercase">TERMINATE_SESSION</button>
                     </div>
-                    <Button onClick={onLogout} className="w-full border-red-500 text-red-500 hover:bg-red-50 mt-8">
-                      <div className="flex items-center justify-center gap-2"><LogOut size={14} /> SIGN OUT</div>
-                    </Button>
                   </div>
                 )}
               </div>
@@ -751,6 +821,7 @@ export const UserProfileModal = ({
     </Modal>
   );
 };
+
 
 export const MindStream = ({
   user,
@@ -880,17 +951,8 @@ export const MindStream = ({
   useEffect(() => {
     if (user?.uid) {
       const unsub = subscribeToNotifications(user.uid, setNotifications);
-
-      // Fallback polling every 10 seconds to ensure consistency
-      const interval = setInterval(() => {
-        if (user.uid) {
-          fetchNotifications(user.uid, setNotifications);
-        }
-      }, 10000);
-
       return () => {
         unsub();
-        clearInterval(interval);
       };
     }
   }, [user?.uid]);
@@ -1412,7 +1474,7 @@ export const MindStream = ({
                   onClick={() => { setActiveView('spaces'); setActiveSpace(null); setIsSidebarOpen(false); }}
                   className="w-full py-3 bg-white border border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-[10px] font-black text-black hover:bg-green-50 active:translate-x-[2px] active:translate-y-[2px] active:shadow-none tracking-[0.2em] uppercase transition-all flex items-center justify-center gap-2"
                 >
-                  <Compass size={14} strokeWidth={2.5} /> EXPLORE_NET
+                  <Compass size={14} strokeWidth={2.5} /> EXPLORE_SPACES
                 </button>
               </div>
             </div>
