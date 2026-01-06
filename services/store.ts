@@ -418,6 +418,43 @@ export const subscribeToFeed = (callback: (posts: Comment[]) => void, userId?: s
 
 export const subscribeToStream = subscribeToFeed;
 
+// Duplicate postThought removed.
+
+export const subscribeToChatGroupMessages = (groupId: string, callback: (msgs: ChatMessage[]) => void) => {
+  const fetchMsgs = async () => {
+    const { data } = await supabase
+      .from('messages')
+      .select('*')
+      .eq('group_id', groupId)
+      .order('created_at', { ascending: true });
+
+    if (data) {
+      callback(data.map((d: any) => ({
+        id: d.id,
+        senderId: d.sender_id,
+        receiverId: d.receiver_id,
+        groupId: d.group_id,
+        text: d.text,
+        isRead: d.is_read,
+        createdAt: { toDate: () => new Date(d.created_at) }
+      })));
+    }
+  };
+
+  fetchMsgs();
+
+  const subscription = supabase
+    .channel(`group_messages:${groupId}`)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'messages', filter: `group_id=eq.${groupId}` }, () => {
+      fetchMsgs();
+    })
+    .subscribe();
+
+  return () => {
+    supabase.removeChannel(subscription);
+  };
+};
+
 export const votePost = async (postId: string, userId: string, value: number, currentLikes?: number, currentVote?: number) => {
   const { error } = await supabase.from('votes').upsert({
     post_id: postId,

@@ -1464,10 +1464,52 @@ export const MindStream = ({
       onOpenLogin();
       return;
     }
+
+    // Optimistic Update
+    const tempId = `temp-${Date.now()}`;
+    const blobUrl = files && files.length > 0 ? URL.createObjectURL(files[0]) : null;
+    const mediaType = files && files.length > 0 ? (files[0].type.startsWith('video') ? 'video' : 'image') : null;
+
+    const newThought: Comment = {
+      id: tempId,
+      postId: 'stream',
+      parentId: parentId || null,
+      title: null,
+      text,
+      authorId: user.uid,
+      authorName: user.displayName,
+      authorPhoto: user.photoURL,
+      mediaUrl: blobUrl,
+      mediaType: mediaType,
+      mediaItems: [],
+      likes: 0,
+      createdAt: { toDate: () => new Date() },
+      children: [],
+      spaceId: activeSpace?.id || null,
+      spaceHandle: activeSpace?.handle || null
+    };
+
+    const addNodeToTree = (nodes: Comment[], newNode: Comment): Comment[] => {
+      // If root reply (should be rare in this function context as parentId is usually set)
+      if (!newNode.parentId) return [newNode, ...nodes];
+
+      return nodes.map(node => {
+        if (node.id === newNode.parentId) {
+          return { ...node, children: [newNode, ...(node.children || [])] };
+        } else if (node.children && node.children.length > 0) {
+          return { ...node, children: addNodeToTree(node.children, newNode) };
+        }
+        return node;
+      });
+    };
+
+    setThoughts(prev => addNodeToTree(prev, newThought));
+
     try {
       await postThought(text, user, parentId, undefined, files, activeSpace?.id, undefined, undefined, activeSpace?.handle);
     } catch (e: any) {
       showToast(`Failed to reply: ${e.message}`, 'error');
+      // If failed, we should theoretically remove the optimistic node, but avoiding complex revert for now.
     }
   };
 

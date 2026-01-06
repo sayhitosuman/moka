@@ -9,7 +9,7 @@ import { UserProfile, ChatMessage, ChatGroup } from '../types';
 import {
   sendMessage, getPublicUserProfile, markChatAsRead,
   createChatGroup, updateChatGroup, joinChatGroup, searchChatGroups, subscribeToChatGroups,
-  fetchChatGroupMembers, uploadMedia
+  fetchChatGroupMembers, uploadMedia, subscribeToChatGroupMessages
 } from '../services/store';
 import { Window, Button, THEME, Input } from './UI';
 
@@ -43,6 +43,17 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
   const [showMembers, setShowMembers] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [clubDetailView, setClubDetailView] = useState<'chat' | 'members' | 'settings'>('chat');
+  const [groupMessages, setGroupMessages] = useState<ChatMessage[]>([]);
+
+  // Subscribe to active group messages
+  useEffect(() => {
+    if (activeGroup) {
+      const unsub = subscribeToChatGroupMessages(activeGroup.id, setGroupMessages);
+      return () => unsub();
+    } else {
+      setGroupMessages([]);
+    }
+  }, [activeGroup]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -98,14 +109,34 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
 
   const handleSend = async () => {
     if (!inputText.trim()) return;
+    const text = inputText;
+    setInputText(''); // Clear instantly
 
-    if (activeChatUser) {
-      await sendMessage(currentUser.uid, activeChatUser.uid, inputText, null);
-    } else if (activeGroup) {
-      await sendMessage(currentUser.uid, null, inputText, activeGroup.id);
+    if (activeGroup) {
+      // Optimistic Update for Group
+      const tempId = 'temp-' + Date.now();
+      const optimisticMsg: ChatMessage = {
+        id: tempId,
+        senderId: currentUser.uid,
+        receiverId: null,
+        groupId: activeGroup.id,
+        text: text,
+        isRead: false,
+        createdAt: { toDate: () => new Date() }
+      };
+      setGroupMessages(prev => [...prev, optimisticMsg]);
+
+      try {
+        await sendMessage(currentUser.uid, null, text, activeGroup.id);
+      } catch (err) {
+        console.error("Failed to send message", err);
+        setGroupMessages(prev => prev.filter(m => m.id !== tempId)); // Revert
+        alert("Message failed to send");
+      }
+    } else if (activeChatUser) {
+      // Personal chat (prop-based, harder to optimistic update without setMessages prop, but fast enough usually)
+      await sendMessage(currentUser.uid, activeChatUser.uid, text, null);
     }
-
-    setInputText('');
   };
 
   const handleCreateGroup = async () => {
@@ -190,7 +221,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
 
   // Filter messages for active conversation
   const activeMessages = activeGroup
-    ? messages.filter(m => m.groupId === activeGroup.id)
+    ? groupMessages
     : activeChatUser
       ? messages.filter(m =>
         (!m.groupId) && (
