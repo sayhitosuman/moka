@@ -253,6 +253,12 @@ const App = () => {
 
   const handleMarkRead = async (senderId: string) => {
     if (user) {
+      // Optimistic Update
+      setMessages(prev => prev.map(m =>
+        (!m.groupId && m.senderId === senderId && m.receiverId === user.uid)
+          ? { ...m, isRead: true }
+          : m
+      ));
       await markChatAsRead(user.uid, senderId);
     }
   };

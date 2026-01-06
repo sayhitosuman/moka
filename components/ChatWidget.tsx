@@ -5,13 +5,21 @@ import {
   Square, Check, CheckCheck, Users, Plus, Search,
   Hash, ShieldCheck, Info, Camera, LogOut, Settings
 } from 'lucide-react';
-import { UserProfile, ChatMessage, ChatGroup } from '../types';
+import { UserProfile, ChatMessage, ChatGroup, Comment } from '../types';
 import {
   sendMessage, getPublicUserProfile, markChatAsRead,
   createChatGroup, updateChatGroup, joinChatGroup, searchChatGroups, subscribeToChatGroups,
   fetchChatGroupMembers, uploadMedia, subscribeToChatGroupMessages
 } from '../services/store';
 import { Window, Button, THEME, Input } from './UI';
+
+// Helper for rendering dates similarly to Guestbook.tsx
+const renderDate = (createdAt: any) => {
+  if (!createdAt) return '...';
+  const date = createdAt.toDate ? createdAt.toDate() : new Date(createdAt);
+  if (isNaN(date.getTime())) return '...';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
 
 interface ChatWidgetProps {
   currentUser: UserProfile;
@@ -118,7 +126,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
       const optimisticMsg: ChatMessage = {
         id: tempId,
         senderId: currentUser.uid,
-        receiverId: null,
+        receiverId: undefined,
         groupId: activeGroup.id,
         text: text,
         isRead: false,
@@ -293,6 +301,8 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                       onClick={() => {
                         if (activeGroup) {
                           setClubDetailView('members');
+                        } else if (activeChatUser && onOpenProfile) {
+                          onOpenProfile(activeChatUser.uid);
                         }
                       }}
                       className="font-black text-sm truncate uppercase tracking-tight flex items-center gap-2 hover:underline cursor-pointer text-left w-full"
@@ -533,7 +543,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                               </div>
                             )}
                             <div className={`absolute top-0 ${isMe ? '-left-12' : '-right-12'} opacity-0 group-hover:opacity-100 transition-opacity`}>
-                              <span className="text-[9px] text-gray-400 font-bold">{new Date(m.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              <span className="text-[9px] text-gray-400 font-bold">{renderDate(m.createdAt)}</span>
                             </div>
                           </div>
                         </div>
@@ -708,7 +718,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                             <div className="flex-1 min-w-0">
                               <div className="flex justify-between items-baseline mb-0.5">
                                 <div className="font-black text-sm uppercase tracking-tight truncate">{profile.fullName || profile.displayName}</div>
-                                {lastMsg && <div className="text-[9px] text-gray-400 font-black uppercase tracking-tighter shrink-0 ml-2">{new Date(lastMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
+                                {lastMsg && <div className="text-[9px] text-gray-400 font-black uppercase tracking-tighter shrink-0 ml-2">{renderDate(lastMsg.createdAt)}</div>}
                               </div>
                               <div className="text-xs text-gray-500 truncate group-hover:text-black flex items-center gap-1 font-medium">
                                 {lastMsg ? (
@@ -805,7 +815,7 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                                 <div className="flex-1 min-w-0">
                                   <div className="flex justify-between items-baseline mb-1">
                                     <div className="font-black text-sm uppercase tracking-tight truncate group-hover:text-black">c:{g.name}</div>
-                                    {lastMsg && <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest shrink-0 ml-2">{new Date(lastMsg.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>}
+                                    {lastMsg && <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest shrink-0 ml-2">{renderDate(lastMsg.createdAt)}</div>}
                                   </div>
                                   <div className="text-xs text-gray-500 truncate group-hover:text-black flex items-center gap-1.5 font-medium">
                                     {lastMsg ? (

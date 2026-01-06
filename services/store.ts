@@ -31,7 +31,8 @@ const mapToComment = (row: any): Comment => ({
   createdAt: { toDate: () => new Date(row.created_at) },
   children: [],
   spaceId: row.space_id,
-  spaceHandle: row.space_handle || row.spaces?.handle
+  spaceHandle: row.space_handle || row.spaces?.handle,
+  tags: row.tags || []
 });
 
 const mapToSpace = (d: any): Space => ({
@@ -345,10 +346,27 @@ export const togglePinPost = async (postId: string, isPinned: boolean) => {
 
 export const subscribeToFeed = (callback: (posts: Comment[]) => void, userId?: string) => {
   const fetchPostsTree = async () => {
-    const { data } = await supabase
+    const { data, error: postsError } = await supabase
       .from('posts')
       .select('*, spaces(handle)')
       .order('created_at', { ascending: false });
+
+    if (postsError) {
+      console.error('Error fetching posts:', postsError);
+      return;
+    }
+
+    let userVotesMap = new Map<string, number>();
+    if (userId) {
+      const { data: votes } = await supabase
+        .from('votes')
+        .select('post_id, value')
+        .eq('user_id', userId);
+
+      if (votes) {
+        votes.forEach(v => userVotesMap.set(v.post_id, v.value));
+      }
+    }
 
     if (data) {
       const allPosts = data.map(mapToComment);
@@ -364,12 +382,13 @@ export const subscribeToFeed = (callback: (posts: Comment[]) => void, userId?: s
 
       const profileMap = new Map(profiles?.map(p => [p.uid, p.photo_url]) || []);
 
-      // Update authorPhoto with latest from profiles
+      // Update mapping with user votes and latest profiles
       allPosts.forEach(p => {
         const latestPhoto = profileMap.get(p.authorId);
         if (latestPhoto) {
           p.authorPhoto = latestPhoto;
         }
+        p.userVote = userVotesMap.get(p.id) || 0;
       });
 
       const postMap = new Map<string, Comment>();
@@ -455,14 +474,31 @@ export const subscribeToChatGroupMessages = (groupId: string, callback: (msgs: C
   };
 };
 
-export const votePost = async (postId: string, userId: string, value: number, currentLikes?: number, currentVote?: number) => {
-  const { error } = await supabase.from('votes').upsert({
-    post_id: postId,
-    user_id: userId,
-    value
-  });
+export const votePost = async (postId: string, userId: string, value: number, currentLikes: number, currentVote: number) => {
+  // 1. Update/Delete vote
+  if (value === 0) {
+    const { error: delError } = await supabase.from('votes').delete().eq('post_id', postId).eq('user_id', userId);
+    if (delError) throw delError;
+  } else {
+    const { error: upsertError } = await supabase.from('votes').upsert({
+      post_id: postId,
+      user_id: userId,
+      value
+    }, { onConflict: 'post_id,user_id' });
+    if (upsertError) throw upsertError;
+  }
 
-  if (error) throw error;
+  // 2. Calculate new total likes
+  const diff = value - currentVote;
+  const newLikes = currentLikes + diff;
+
+  // 3. Update post total
+  const { error: postError } = await supabase
+    .from('posts')
+    .update({ likes: newLikes })
+    .eq('id', postId);
+
+  if (postError) throw postError;
 };
 
 export const deletePost = async (id: string, authorId: string) => {
@@ -546,7 +582,8 @@ export const joinSpace = async (spaceId: string, userId: string, isPrivate: bool
     user_id: userId,
     role: 'member',
     status: isPrivate ? 'pending' : 'accepted'
-  });
+  }, { onConflict: 'space_id,user_id' });
+
   if (error) throw error;
 
   if (isPrivate) {
@@ -780,7 +817,28 @@ export const globalSearch = async (query: string): Promise<SearchResult[]> => {
 };
 
 // --- STUBS ---
-export const markChatAsRead = async (...args: any[]) => { };
+export const markChatAsRead = async (userId: string, targetId: string, isGroup: boolean = false) => {
+  if (isGroup) {
+    // For groups, we could track last_read_at in chat_group_members
+  } else {
+    // Mark messages as read
+    await supabase
+      .from('messages')
+      .update({ is_read: true })
+      .eq('receiver_id', userId)
+      .eq('sender_id', targetId)
+      .eq('is_read', false);
+
+    // Also mark notifications of type 'message' from this user as read
+    await supabase
+      .from('notifications')
+      .update({ is_read: true })
+      .eq('user_id', userId)
+      .eq('from_id', targetId)
+      .eq('type', 'message')
+      .eq('is_read', false);
+  }
+};
 export const updateSpace = async (spaceId: string, updates: Partial<Space>) => {
   const { error } = await supabase
     .from('spaces')
@@ -798,18 +856,32 @@ export const updateSpace = async (spaceId: string, updates: Partial<Space>) => {
   if (error) throw error;
 };
 export const fetchSpaceMembers = async (sid: string) => {
-  const { data } = await supabase
+  const { data: members, error: memError } = await supabase
     .from('space_members')
-    .select('role, status, profiles(*)')
+    .select('user_id, role, status')
     .eq('space_id', sid);
 
-  return data ? data.map((d: any) => ({
-    uid: d.profiles.uid,
-    name: d.profiles.display_name,
-    photoURL: d.profiles.photo_url,
-    role: d.role,
-    status: d.status
-  })) : [];
+  if (memError || !members) return [];
+
+  const userIds = members.map(m => m.user_id);
+  const { data: profiles } = await supabase
+    .from('profiles')
+    .select('uid, display_name, photo_url')
+    .in('uid', userIds);
+
+  // Use a map for easier lookup
+  const profileLookup: Record<string, { name: string, photo: string }> = {};
+  profiles?.forEach(p => {
+    profileLookup[p.uid] = { name: p.display_name, photo: p.photo_url };
+  });
+
+  return members.map(m => ({
+    uid: m.user_id,
+    name: profileLookup[m.user_id]?.name || 'Anonymous',
+    photoURL: profileLookup[m.user_id]?.photo,
+    role: m.role,
+    status: m.status
+  }));
 };
 export const respondToSpaceRequest = async (sid: string, uid: string, acc: boolean) => {
   if (acc) {

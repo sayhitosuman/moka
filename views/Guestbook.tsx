@@ -386,16 +386,27 @@ const ThreadItem: React.FC<ThreadItemProps> = ({
   );
 };
 
+// --- COMMENT NODE ---
 interface CommentNodeProps {
   c: Comment;
   onReply: (text: string, parentId: string, files?: File[]) => void;
   onUserClick: (id: string) => void;
   canPost: boolean;
+  highlightedId?: string | null;
 }
 
-const CommentNode: React.FC<CommentNodeProps> = ({ c, onReply, onUserClick, canPost }) => {
+const CommentNode: React.FC<CommentNodeProps> = ({ c, onReply, onUserClick, canPost, highlightedId }) => {
   const [isReplying, setIsReplying] = useState(false);
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const nodeRef = useRef<HTMLDivElement>(null);
+  const isHighlighted = highlightedId === c.id;
+
+  useEffect(() => {
+    if (isHighlighted && nodeRef.current) {
+      nodeRef.current.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      // Clean up highlight after animation if we wanted, but keeping it is fine for context
+    }
+  }, [isHighlighted]);
 
   if (isCollapsed) {
     return (
@@ -418,7 +429,10 @@ const CommentNode: React.FC<CommentNodeProps> = ({ c, onReply, onUserClick, canP
   }
 
   return (
-    <div className="mt-5 ml-2 md:ml-4 pl-4 border-l-2 border-gray-100 relative group/cmt hover:border-black/10 transition-colors">
+    <div
+      ref={nodeRef}
+      className={`mt-5 ml-2 md:ml-4 pl-4 border-l-2 relative group/cmt transition-colors duration-500 rounded-r-xl ${isHighlighted ? 'border-yellow-400 bg-yellow-50/50 py-2' : 'border-gray-100 hover:border-black/10'}`}
+    >
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <div
@@ -444,6 +458,12 @@ const CommentNode: React.FC<CommentNodeProps> = ({ c, onReply, onUserClick, canP
       </div>
 
       <p className="text-[14px] text-gray-700 leading-relaxed font-medium mb-3 whitespace-pre-wrap">{c.text}</p>
+      {/* Media Preview for Comments */}
+      {c.mediaUrl && (
+        <div className="mb-3 max-w-sm rounded-[5px] overflow-hidden border border-black">
+          {c.mediaType === 'video' ? <video src={c.mediaUrl} controls className="w-full" /> : <img src={c.mediaUrl} className="w-full" />}
+        </div>
+      )}
 
       <div className="flex gap-4 items-center">
         {canPost && (
@@ -475,6 +495,7 @@ const CommentNode: React.FC<CommentNodeProps> = ({ c, onReply, onUserClick, canP
             onReply={onReply}
             onUserClick={onUserClick}
             canPost={canPost}
+            highlightedId={highlightedId}
           />
         ))}
       </div>
@@ -528,6 +549,10 @@ export const UserProfileModal = ({
 
   const [networkList, setNetworkList] = useState<UserProfile[]>([]);
   const [networkType, setNetworkType] = useState<'followers' | 'following' | 'friends' | null>(null);
+
+  // Space Filters
+  const [spaceTypeFilter, setSpaceTypeFilter] = useState<'all' | 'group' | 'page'>('all');
+  const [spaceRoleFilter, setSpaceRoleFilter] = useState<'all' | 'own' | 'joined'>('all');
 
   const isOwnProfile = currentUser && targetUserId === currentUser.uid;
 
@@ -640,10 +665,21 @@ export const UserProfileModal = ({
 
   if (!isOpen) return null;
 
-  const normalPosts = userPosts.filter(p => p.mediaType !== 'video');
+  // Filter Logic
   const blinks = userPosts.filter(p => p.mediaType === 'video');
-  const groups = userSpaces.filter(s => s.type === 'group');
-  const pages = userSpaces.filter(s => s.type === 'page');
+  // Threads = Top level, non-video posts
+  const threads = userPosts.filter(p => !p.parentId && p.mediaType !== 'video');
+  // Comments = Replies (any type)
+  const comments = userPosts.filter(p => !!p.parentId);
+
+  const filteredSpaces = userSpaces.filter(s => {
+    // Type Filter
+    if (spaceTypeFilter !== 'all' && s.type !== spaceTypeFilter) return false;
+    // Role Filter
+    if (spaceRoleFilter === 'own' && s.ownerId !== profile?.uid) return false;
+    if (spaceRoleFilter === 'joined' && s.ownerId === profile?.uid) return false;
+    return true;
+  });
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={loading ? "DATA_LINK..." : `PROFILE: u:${profile?.displayName || 'USER'}`} maxWidth="max-w-4xl">
@@ -681,7 +717,7 @@ export const UserProfileModal = ({
           </div>
 
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-            <span className="bg-black text-white px-3 py-1 text-[10px] font-black tracking-widest uppercase shadow-lg">SYNCING_PROFILE_DATA...</span>
+            <span className="bg-black text-white px-3 py-1 text-[10px] font-black tracking-widest uppercase shadow-lg">LOADING PROFILE DATA...</span>
           </div>
         </div>
       ) : !profile ? (
@@ -810,9 +846,9 @@ export const UserProfileModal = ({
                       )
                     ) : (
                       <div className="flex flex-col gap-2">
-                        <button onClick={() => onChat(profile.uid)} className="px-6 py-3 bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none font-black text-xs uppercase tracking-widest flex items-center gap-2"><MessageCircle size={14} strokeWidth={3} /> SEND_MESSAGE</button>
+                        <button onClick={() => onChat(profile.uid)} className="px-6 py-3 bg-white border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none font-black text-xs uppercase tracking-widest flex items-center gap-2"><MessageCircle size={14} strokeWidth={3} /> SEND MESSAGE</button>
                         <button onClick={handleFriendAction} className={`px-6 py-3 border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:translate-x-[2px] active:translate-y-[2px] active:shadow-none font-black text-xs uppercase tracking-widest flex items-center gap-2 ${profile.friendStatus === 'friends' ? 'bg-[#d1b8d6]' : 'bg-[#a6cade]'}`}>
-                          {profile.friendStatus === 'friends' ? <><UserCheck size={14} strokeWidth={3} /> NODE_LINKED</> : profile.friendStatus === 'pending_sent' ? <><Loader size={12} className="animate-spin" /> SYNCING...</> : <><UserPlus size={14} strokeWidth={3} /> LINK_NODE</>}
+                          {profile.friendStatus === 'friends' ? <><UserCheck size={14} strokeWidth={3} /> FRIEND</> : profile.friendStatus === 'pending_sent' ? <><Loader size={12} className="animate-spin" /> PENDING...</> : <><UserPlus size={14} strokeWidth={3} /> ADD FRIEND</>}
                         </button>
                       </div>
                     )}
@@ -846,10 +882,10 @@ export const UserProfileModal = ({
               {/* TABS: Neubrutalist Bottom Borders */}
               <div className="flex bg-white border-b-2 border-black overflow-x-auto no-scrollbar">
                 {[
-                  { id: 'posts', label: 'THREADS', count: normalPosts.length, icon: MessageSquare },
+                  { id: 'posts', label: 'THREADS', count: threads.length, icon: MessageSquare },
+                  { id: 'comments', label: 'COMMENTS', count: comments.length, icon: MessageCircle },
                   { id: 'blinks', label: 'BLINKS', count: blinks.length, icon: PlaySquare },
-                  { id: 'groups', label: 'SPACES', count: groups.length, icon: Users },
-                  { id: 'pages', label: 'DOMAINS', count: pages.length, icon: Layout },
+                  { id: 'spaces', label: 'SPACES', count: userSpaces.length, icon: Layout },
                   ...(isOwnProfile ? [{ id: 'settings', label: 'SECURITY', icon: ShieldCheck }] : [])
                 ].map(tab => (
                   <button
@@ -858,7 +894,7 @@ export const UserProfileModal = ({
                     className={`flex-1 py-4 px-4 text-[10px] font-black uppercase tracking-[0.2em] transition-all flex items-center justify-center gap-2 border-r last:border-r-0 border-black ${activeTab === tab.id ? 'bg-black text-white' : 'hover:bg-[#f4f4f5]'}`}
                   >
                     <tab.icon size={12} strokeWidth={3} />
-                    {tab.label} [{tab.count || 0}]
+                    {tab.label}
                   </button>
                 ))}
               </div>
@@ -867,7 +903,7 @@ export const UserProfileModal = ({
               <div className="flex-1 overflow-y-auto p-6 bg-[#f4f4f5]">
                 {activeTab === 'posts' && (
                   <div className="space-y-4">
-                    {normalPosts.length > 0 ? normalPosts.map(p => (
+                    {threads.length > 0 ? threads.map(p => (
                       <div key={p.id} onClick={() => onOpenThread(p.id)} className="p-4 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-[#fffcf0] transition-colors cursor-pointer group relative">
                         <div className="flex justify-between items-center mb-3">
                           <span className="text-[9px] font-black uppercase tracking-widest opacity-40">{formatDate(p.createdAt)}</span>
@@ -878,11 +914,51 @@ export const UserProfileModal = ({
                           <div className="flex-1 min-w-0">
                             <h4 className="font-black text-sm uppercase mb-1 truncate">{p.title || "UNTITLED_THREAD"}</h4>
                             <p className="text-xs font-bold text-gray-600 line-clamp-2 leading-tight">{p.text}</p>
+                            <div className="flex gap-2 mt-2 items-center">
+                              <span className="text-[8px] font-black bg-gray-100 px-1 border border-black uppercase text-gray-500">LIKES: {p.likes}</span>
+                              {p.spaceHandle ? (
+                                <span className={`text-[8px] font-black px-1 border border-black uppercase ${p.tags?.includes('PAGE') ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'}`}>
+                                  IN {p.tags?.includes('PAGE') ? 'PAGE' : 'GROUP'} {formatHandle(p.spaceHandle, p.tags?.includes('PAGE') ? 'page' : 'group')}
+                                </span>
+                              ) : (
+                                <span className="text-[8px] font-black px-1 border border-black uppercase bg-gray-50 text-gray-400">PUBLIC STREAM</span>
+                              )}
+                            </div>
                           </div>
                         </div>
                       </div>
                     )) : (
-                      <div className="h-40 flex items-center justify-center border-2 border-black border-dashed font-black text-[10px] uppercase">NULL_CONTENT_STATUS</div>
+                      <div className="h-40 flex items-center justify-center border-2 border-black border-dashed font-black text-[10px] uppercase">NO_THREADS_PUBLISHED</div>
+                    )}
+                  </div>
+                )}
+
+                {activeTab === 'comments' && (
+                  <div className="space-y-4">
+                    {comments.length > 0 ? comments.map(c => (
+                      <div key={c.id} onClick={() => onOpenThread(c.id)} className="p-4 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-[#f0f9ff] transition-colors cursor-pointer group relative">
+                        <div className="flex justify-between items-center mb-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[9px] font-black uppercase tracking-widest opacity-40">REPLIED {formatDate(c.createdAt)}</span>
+                            {c.spaceHandle ? (
+                              <span className={`text-[8px] font-black px-1 border border-black uppercase ${c.tags?.includes('PAGE') ? 'bg-blue-50 text-blue-600' : 'bg-green-50 text-green-600'}`}>
+                                IN {c.tags?.includes('PAGE') ? 'PAGE' : 'GROUP'}
+                              </span>
+                            ) : (
+                              <span className="text-[7px] font-black border border-gray-200 px-1 text-gray-400 uppercase">STREAM</span>
+                            )}
+                          </div>
+                          {isOwnProfile && <button onClick={(e) => handleDeleteUserPost(c.id, e)} className="p-1 border border-black bg-white hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={12} /></button>}
+                        </div>
+                        <div className="flex items-start gap-3">
+                          <MessageCircle size={16} className="mt-1 text-gray-300" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-bold text-gray-700 line-clamp-3 leading-relaxed">"{c.text}"</p>
+                          </div>
+                        </div>
+                      </div>
+                    )) : (
+                      <div className="h-40 flex items-center justify-center border-2 border-black border-dashed font-black text-[10px] uppercase">NO_COMMENTS_MADE</div>
                     )}
                   </div>
                 )}
@@ -904,45 +980,51 @@ export const UserProfileModal = ({
                   </div>
                 )}
 
-                {activeTab === 'groups' && (
+                {activeTab === 'spaces' && (
                   <div className="space-y-4">
-                    {groups.length > 0 ? groups.map(s => (
-                      <div key={s.id} onClick={() => { onClose(); onNavigate(s.id); }} className="p-4 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex items-center gap-4 hover:bg-[#f0f9ff] cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all">
-                        <div className="w-14 h-14 border-2 border-black shrink-0 overflow-hidden bg-[#a6cade]">
-                          {s.avatarURL ? <img src={s.avatarURL} alt="s" className="w-full h-full object-cover" /> : <Users className="w-full h-full p-3 text-black" />}
-                        </div>
-                        <div className="flex-1">
-                          <h4 className="font-black text-sm uppercase">{s.name}</h4>
-                          <p className="text-[10px] font-black text-gray-500 tracking-wider truncate mb-2">{s.handle}</p>
-                          <div className="inline-block px-2 py-0.5 border border-black bg-white text-[8px] font-black uppercase tracking-widest">{s.memberCount} MEMBERS</div>
-                        </div>
+                    {/* Filters */}
+                    <div className="flex flex-col gap-2 mb-4 bg-white border border-black p-2 rounded-lg">
+                      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                        <span className="text-[8px] font-black uppercase tracking-widest text-gray-400 mr-2">TYPE:</span>
+                        <button onClick={() => setSpaceTypeFilter('all')} className={`px-2 py-0.5 text-[8px] font-black border border-black uppercase ${spaceTypeFilter === 'all' ? 'bg-black text-white' : 'bg-white text-gray-500'}`}>ALL</button>
+                        <button onClick={() => setSpaceTypeFilter('group')} className={`px-2 py-0.5 text-[8px] font-black border border-black uppercase ${spaceTypeFilter === 'group' ? 'bg-black text-white' : 'bg-white text-gray-500'}`}>GROUPS</button>
+                        <button onClick={() => setSpaceTypeFilter('page')} className={`px-2 py-0.5 text-[8px] font-black border border-black uppercase ${spaceTypeFilter === 'page' ? 'bg-black text-white' : 'bg-white text-gray-500'}`}>PAGES</button>
                       </div>
-                    )) : (
-                      <div className="h-40 flex items-center justify-center border-2 border-black border-dashed font-black text-[10px] uppercase">NO_SPACES_JOINED</div>
-                    )}
-                  </div>
-                )}
+                      <div className="flex items-center gap-2 overflow-x-auto no-scrollbar">
+                        <span className="text-[8px] font-black uppercase tracking-widest text-gray-400 mr-2">ROLE:</span>
+                        <button onClick={() => setSpaceRoleFilter('all')} className={`px-2 py-0.5 text-[8px] font-black border border-black uppercase ${spaceRoleFilter === 'all' ? 'bg-black text-white' : 'bg-white text-gray-500'}`}>ALL</button>
+                        <button onClick={() => setSpaceRoleFilter('own')} className={`px-2 py-0.5 text-[8px] font-black border border-black uppercase ${spaceRoleFilter === 'own' ? 'bg-black text-white' : 'bg-white text-gray-500'}`}>OWNED</button>
+                        <button onClick={() => setSpaceRoleFilter('joined')} className={`px-2 py-0.5 text-[8px] font-black border border-black uppercase ${spaceRoleFilter === 'joined' ? 'bg-black text-white' : 'bg-white text-gray-500'}`}>SUBSCRIBED</button>
+                      </div>
+                    </div>
 
-                {activeTab === 'pages' && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {pages.length > 0 ? pages.map(s => (
-                      <div key={s.id} onClick={() => { onClose(); onNavigate(s.id); }} className="p-5 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex flex-col hover:bg-[#fdf2ff] cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all">
-                        <div className="flex items-center gap-3 mb-4">
-                          <div className="w-10 h-10 border-2 border-black bg-[#d1b8d6] flex items-center justify-center font-black">{s.avatarURL ? <img src={s.avatarURL} className="w-full h-full object-cover" /> : s.name[0]}</div>
-                          <div className="min-w-0 flex-1">
-                            <h4 className="font-black text-xs uppercase truncate">{s.name}</h4>
-                            <span className="text-[9px] font-black text-gray-400">{s.handle}</span>
+                    <div className="space-y-3">
+                      {filteredSpaces.length > 0 ? filteredSpaces.map(s => (
+                        <div key={s.id} onClick={() => { onClose(); onNavigate(s.id); }} className="p-4 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] flex items-center gap-4 hover:bg-[#fffcf0] cursor-pointer active:translate-x-[2px] active:translate-y-[2px] active:shadow-none transition-all">
+                          <div className={`w-12 h-12 border-2 border-black shrink-0 overflow-hidden flex items-center justify-center ${s.type === 'group' ? 'bg-green-100' : 'bg-blue-100'}`}>
+                            {s.avatarURL ? <img src={s.avatarURL} alt="s" className="w-full h-full object-cover" /> : (
+                              s.type === 'group' ? <Users size={20} className="text-black" /> : <Layout size={20} className="text-black" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className={`text-[8px] font-black px-1 border border-black uppercase ${s.type === 'group' ? 'bg-green-300' : 'bg-blue-300'}`}>{s.type}</span>
+                              {s.ownerId === profile?.uid && <span className="text-[8px] font-black px-1 border border-black bg-yellow-400 uppercase">OWNER</span>}
+                            </div>
+                            <h4 className="font-black text-sm uppercase truncate">{s.name}</h4>
+                            <p className="text-[10px] font-black text-gray-400 tracking-wider truncate">{s.handle}</p>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-[9px] font-black uppercase text-gray-400">{s.memberCount || 0} MEMBERS</div>
                           </div>
                         </div>
-                        <p className="text-[10px] font-black text-gray-600 line-clamp-2 mb-4">DESC://{s.description || "DEFAULT_DOMAIN_ID"}</p>
-                        <div className="mt-auto pt-3 border-t border-black/10 flex justify-between items-center text-[9px] font-black uppercase tracking-widest">
-                          <span>FOLLOWERS: {s.followerCount}</span>
-                          <button className="bg-black text-white px-2 py-1">ENTER</button>
+                      )) : (
+                        <div className="py-12 flex flex-col items-center justify-center border-2 border-black border-dashed font-black text-[10px] uppercase text-gray-400 bg-gray-50">
+                          <Layout size={24} className="mb-2 opacity-20" />
+                          NO_SPACES_MATCH_FILTER
                         </div>
-                      </div>
-                    )) : (
-                      <div className="col-span-full h-40 flex items-center justify-center border-2 border-black border-dashed font-black text-[10px] uppercase">NO_DOMAINS_FOLLOWED</div>
-                    )}
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -1017,6 +1099,36 @@ export const MindStream = ({
   // Use ID to track active thread so updates to 'thoughts' propagate immediately to the view
   const [activeThreadId, setActiveThreadId] = useState<string | null>(initialThreadId || null);
   const activeThread = thoughts.find(t => t.id === activeThreadId) || null;
+  const [highlightedCommentId, setHighlightedCommentId] = useState<string | null>(null);
+
+  // Helper to find root thread of ANY comment/post ID
+  const findThreadAndOpen = (targetId: string) => {
+    // 1. Check if it's a top level thread
+    const top = thoughts.find(t => t.id === targetId);
+    if (top) {
+      setActiveThreadId(targetId);
+      setHighlightedCommentId(null);
+      return;
+    }
+
+    // 2. Recursive search
+    const containsNode = (node: Comment, target: string): boolean => {
+      if (node.id === target) return true;
+      if (node.children) {
+        return node.children.some(child => containsNode(child, target));
+      }
+      return false;
+    };
+
+    for (const root of thoughts) {
+      if (containsNode(root, targetId)) {
+        setActiveThreadId(root.id);
+        setHighlightedCommentId(targetId);
+        return;
+      }
+    }
+    showToast("Thread not found or unavailable.", 'error');
+  };
 
   // Share Card State
   const [shareCardThread, setShareCardThread] = useState<Comment | null>(null);
@@ -1518,20 +1630,60 @@ export const MindStream = ({
       onOpenLogin();
       return;
     }
-    const post = thoughts.find(t => t.id === postId);
-    if (post) {
+    const updateThreadVote = (nodes: Comment[]): Comment[] => {
+      return nodes.map(node => {
+        if (node.id === postId) {
+          const oldVote = node.userVote || 0;
+          const diff = val - oldVote;
+          return {
+            ...node,
+            userVote: val,
+            likes: (node.likes || 0) + diff
+          };
+        } else if (node.children && node.children.length > 0) {
+          return { ...node, children: updateThreadVote(node.children) };
+        }
+        return node;
+      });
+    };
+
+    const findSpecificNode = (nodes: Comment[]): Comment | undefined => {
+      for (const n of nodes) {
+        if (n.id === postId) return n;
+        if (n.children && n.children.length > 0) {
+          const found = findSpecificNode(n.children);
+          if (found) return found;
+        }
+      }
+      return undefined;
+    };
+
+    const targetNode = findSpecificNode(thoughts);
+
+    if (targetNode) {
       // RULE: In groups, only members can vote.
-      if (post.spaceId) {
-        const space = spaces.find(s => s.id === post.spaceId);
+      if (targetNode.spaceId) {
+        const space = spaces.find(s => s.id === targetNode.spaceId);
         if (space && space.type === 'group') {
-          const isMember = await fetchIsMember(space.id, user.uid);
-          if (!isMember) {
+          const membership = await fetchIsMember(space.id, user.uid);
+          if (!membership || membership.status !== 'accepted') {
             showToast("Only members of this group can vote on posts.", 'error');
             return;
           }
         }
       }
-      await votePost(postId, user.uid, val, post.likes || 0, post.userVote || 0);
+
+      // Optimistic Update
+      setThoughts(prev => updateThreadVote(prev));
+
+      try {
+        await votePost(postId, user.uid, val, targetNode.likes || 0, targetNode.userVote || 0);
+      } catch (e: any) {
+        console.error("Voting error:", e);
+        showToast("Failed to record vote. " + (e.message || ""), 'error');
+        // Refresh feed to sync state back
+        subscribeToFeed(setThoughts, user.uid);
+      }
     }
   };
 
@@ -2159,23 +2311,32 @@ export const MindStream = ({
                                 disabled={userSpaceStatus === 'pending'}
                                 onClick={async () => {
                                   if (!user) { onOpenLogin(); return; }
-                                  if (isMemberOfActiveSpace) {
-                                    if (window.confirm(`Leave this space?`)) {
-                                      await leaveSpace(activeSpace.id, user.uid);
-                                      setIsMemberOfActiveSpace(false);
-                                      setUserSpaceStatus(null);
-                                      setUserSpaceRole(null);
-                                    }
-                                  } else {
-                                    await joinSpace(activeSpace.id, user.uid, activeSpace.isPrivate);
-                                    if (activeSpace.isPrivate) {
-                                      setUserSpaceStatus('pending');
-                                      showToast("Request sent to admins!", 'info');
+                                  try {
+                                    if (isMemberOfActiveSpace) {
+                                      if (window.confirm(`Leave this space?`)) {
+                                        await leaveSpace(activeSpace.id, user.uid);
+                                        setIsMemberOfActiveSpace(false);
+                                        setUserSpaceStatus(null);
+                                        setUserSpaceRole(null);
+                                        showToast("Left space.", 'success');
+                                      }
                                     } else {
-                                      setIsMemberOfActiveSpace(true);
-                                      setUserSpaceStatus('accepted');
-                                      setUserSpaceRole('member');
+                                      await joinSpace(activeSpace.id, user.uid, activeSpace.isPrivate);
+                                      if (activeSpace.isPrivate) {
+                                        setUserSpaceStatus('pending');
+                                        showToast("Request sent to admins!", 'info');
+                                      } else {
+                                        setIsMemberOfActiveSpace(true);
+                                        setUserSpaceStatus('accepted');
+                                        setUserSpaceRole('member');
+                                        showToast("Joined space successfully!", 'success');
+                                        // Refresh member list
+                                        fetchSpaceMembers(activeSpace.id).then(setSpaceMembers);
+                                      }
                                     }
+                                  } catch (err: any) {
+                                    console.error(err);
+                                    showToast(err.message || "Operation failed.", 'error');
                                   }
                                 }}
                               >
@@ -2905,6 +3066,7 @@ export const MindStream = ({
                   onReply={handleInlinePost}
                   onUserClick={(uid) => setProfileTargetId(uid)}
                   canPost={canPost}
+                  highlightedId={highlightedCommentId}
                 />
               ))}
             </div>
@@ -3121,7 +3283,8 @@ export const MindStream = ({
         onDeletePost={handleDeleteThought}
         onOpenThread={(id) => {
           setProfileTargetId(null);
-          setActiveThreadId(id);
+          // NEW: Use the smart deeper finder
+          findThreadAndOpen(id);
         }}
         onToast={showToast}
       />
