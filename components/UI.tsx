@@ -7,7 +7,7 @@ export const THEME = {
   bg: 'bg-[#f4f4f5]',
   window: 'bg-[#ffffff]',
   border: 'border-black',
-  shadow: 'shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]',
+  shadow: 'shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]',
   accent: 'bg-[#d1b8d6]', // Purple
   blue: 'bg-[#a6cade]',   // Blue
   green: 'bg-[#b8d6c6]',  // Green
@@ -24,6 +24,7 @@ interface WindowProps {
   onClose?: () => void;
   customMaximizeClass?: string;
   noPadding?: boolean;
+  scrollable?: boolean;
 }
 
 export const Window: React.FC<WindowProps> = ({
@@ -34,6 +35,7 @@ export const Window: React.FC<WindowProps> = ({
   color = 'bg-white',
   onClose,
   noPadding = false,
+  scrollable = !noPadding,
   customMaximizeClass
 }) => {
   const [isMinimized, setIsMinimized] = useState(false);
@@ -78,7 +80,7 @@ export const Window: React.FC<WindowProps> = ({
 
       {/* Content */}
       {!isMinimized && (
-        <div className={`flex-1 relative bg-white min-h-0 ${noPadding ? 'flex flex-col overflow-hidden' : 'p-4 overflow-y-auto custom-scrollbar'}`}>
+        <div className={`flex-1 relative bg-white min-h-0 ${noPadding ? 'flex flex-col' : 'p-4'} ${scrollable ? 'overflow-y-auto custom-scrollbar' : 'overflow-hidden'}`}>
           {children}
         </div>
       )}
@@ -126,7 +128,7 @@ export const Button: React.FC<ButtonProps> = ({
 export const Input = ({ className = '', ...props }: React.InputHTMLAttributes<HTMLInputElement>) => (
   <input
     {...props}
-    className={`w-full bg-[#f4f4f5] border-b border-black p-2 font-mono text-xs focus:outline-none focus:bg-[#d1b8d6] transition-colors placeholder-gray-400 ${className}`}
+    className={`w-full bg-[#f4f4f5] border border-black p-1.5 font-mono text-xs focus:outline-none focus:bg-[#d1b8d6] transition-colors placeholder-gray-400 rounded-md ${className}`}
   />
 );
 
@@ -154,11 +156,11 @@ export const Toast: React.FC<ToastProps> = ({ message, type = 'info', onClose })
   const icon = type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ';
 
   return (
-    <div className={`fixed top-4 right-4 z-[200] ${bgColor} text-white px-4 py-2 rounded-lg shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] border-2 border-black animate-slide-down flex items-center gap-2 max-w-sm`}>
-      <span className="font-bold">{icon}</span>
-      <span className="text-sm font-medium">{message}</span>
+    <div className={`fixed top-4 right-4 z-[200] ${bgColor} text-white px-3 py-1.5 rounded-lg shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] border border-black animate-slide-down flex items-center gap-2 max-w-sm`}>
+      <span className="font-bold text-xs">{icon}</span>
+      <span className="text-xs font-medium">{message}</span>
       <button onClick={onClose} className="ml-auto hover:bg-black/20 p-1 rounded">
-        <X size={14} />
+        <X size={12} />
       </button>
     </div>
   );
@@ -189,6 +191,7 @@ interface ModalProps {
   children?: React.ReactNode;
   customClass?: string;
   maxWidth?: string;
+  scrollable?: boolean;
 }
 
 export const Modal: React.FC<ModalProps> = ({
@@ -197,7 +200,8 @@ export const Modal: React.FC<ModalProps> = ({
   title,
   children,
   customClass,
-  maxWidth = "max-w-2xl"
+  maxWidth = "max-w-2xl",
+  scrollable = true
 }) => {
   if (!isOpen) return null;
 
@@ -207,14 +211,16 @@ export const Modal: React.FC<ModalProps> = ({
       onClick={onClose} // Close on backdrop click
     >
       <div
-        className={`${customClass || `w-full ${maxWidth} max-h-[90vh] flex flex-col animate-scale-in pointer-events-auto border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] bg-white`} transition-all duration-300`}
+        className={`${customClass || `w-full ${maxWidth} max-h-[90vh] flex flex-col animate-scale-in pointer-events-auto border border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] bg-white rounded-xl overflow-hidden`} transition-all duration-300`}
         onClick={(e) => e.stopPropagation()} // Prevent close when clicking inside
       >
         <Window
           title={title || 'Detail View'}
           onClose={onClose}
-          color="bg-black text-white"
+          color="bg-white text-black"
           className="flex-1 min-h-0"
+          noPadding
+          scrollable={scrollable}
         >
           {children}
         </Window>

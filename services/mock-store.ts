@@ -43,7 +43,7 @@ const MOCK_SPACES: Space[] = [
   {
     id: 'space1',
     name: 'Dev Community',
-    handle: 'g/dev',
+    handle: 'g:dev',
     description: 'A place for developers to share their journey.',
     type: 'group',
     ownerId: 'sumanadmin',
@@ -56,7 +56,7 @@ const MOCK_SPACES: Space[] = [
   {
     id: 'space2',
     name: 'MindStream Official',
-    handle: '@mindstream',
+    handle: 'p:mindstream',
     description: 'Official announcements and updates.',
     type: 'page',
     ownerId: 'sumanadmin',
@@ -82,7 +82,7 @@ const MOCK_POSTS: Comment[] = [
     likes: 42,
     userVote: 1,
     children: [],
-    spaceHandle: 'g/dev'
+    spaceHandle: 'g:dev'
   },
   {
     id: 'post2',
@@ -246,7 +246,7 @@ export const fetchUserNetwork = async (userId: string, type: string): Promise<Us
 export const globalSearch = async (query: string): Promise<any[]> => {
   return [
     { type: 'user', id: 'user2', name: 'Aura Digital', handle: 'aura', photoURL: 'https://api.dicebear.com/7.x/avataaars/svg?seed=aura' },
-    { type: 'group', id: 'space1', name: 'Dev Community', handle: 'g/dev', photoURL: 'https://api.dicebear.com/7.x/identicon/svg?seed=dev' }
+    { type: 'group', id: 'space1', name: 'Dev Community', handle: 'g:dev', photoURL: 'https://api.dicebear.com/7.x/identicon/svg?seed=dev' }
   ];
 };
 

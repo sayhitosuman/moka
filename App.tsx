@@ -3,8 +3,9 @@ import { User, MailCheck, AlertCircle, Eye, EyeOff } from 'lucide-react';
 import { UserProfile, ChatMessage } from './types';
 import {
   subscribeToAuth, loginAnonymously, logoutUser,
-  registerUser, loginUser, getIsMockMode, getPublicUserProfile, subscribeToMessages, markChatAsRead, checkUsernameAvailability
+  registerUser, loginUser, getIsMockMode, getPublicUserProfile, subscribeToMessages, markChatAsRead, checkUsernameAvailability, checkEmailAvailability
 } from './services/store';
+import { CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import { Button, Modal, Input } from './components/UI';
 import { MindStream } from './views/Guestbook';
 import { ChatWidget } from './components/ChatWidget';
@@ -35,6 +36,12 @@ const App = () => {
   const [registrationSuccess, setRegistrationSuccess] = useState(false);
   const [usernameAvailability, setUsernameAvailability] = useState<'none' | 'checking' | 'available' | 'taken'>('none');
   const [emailAvailability, setEmailAvailability] = useState<'none' | 'checking' | 'available' | 'taken'>('none');
+  const [passwordRequirements, setPasswordRequirements] = useState({
+    hasUpper: false,
+    hasLower: false,
+    hasNumber: false,
+    isMinLength: false
+  });
 
   // Status Check
   const isMock = getIsMockMode();
@@ -103,7 +110,7 @@ const App = () => {
 
   // Debounced Username Check
   useEffect(() => {
-    if (authMode !== 'register' || !registerUsername) {
+    if (authMode !== 'register' || !registerUsername || registerUsername.length < 3) {
       setUsernameAvailability('none');
       return;
     }
@@ -114,13 +121,13 @@ const App = () => {
         setUsernameAvailability(isAvailable ? 'available' : 'taken');
       } catch (err) {
         console.error('Availability check failed:', err);
-        setUsernameAvailability('available'); // Fallback to avoid getting stuck
+        setUsernameAvailability('none');
       }
-    }, 1500);
+    }, 1000);
     return () => clearTimeout(timer);
   }, [registerUsername, authMode]);
 
-  // Debounced Email Check (Domain restricted too)
+  // Debounced Email Check
   useEffect(() => {
     if (authMode !== 'register' || !registerEmail || !registerEmail.includes('@')) {
       setEmailAvailability('none');
@@ -128,12 +135,26 @@ const App = () => {
     }
     setEmailAvailability('checking');
     const timer = setTimeout(async () => {
-      // Basic check if email exists (we use a dedicated check if implemented)
-      // For now, assume it's available or it will fail on signup
-      setEmailAvailability('available');
-    }, 1500);
+      try {
+        const isAvailable = await checkEmailAvailability(registerEmail);
+        setEmailAvailability(isAvailable ? 'available' : 'taken');
+      } catch (err) {
+        console.error('Email availability check failed:', err);
+        setEmailAvailability('none');
+      }
+    }, 1000);
     return () => clearTimeout(timer);
   }, [registerEmail, authMode]);
+
+  // Password Requirements Check
+  useEffect(() => {
+    setPasswordRequirements({
+      hasUpper: /[A-Z]/.test(authPassword),
+      hasLower: /[a-z]/.test(authPassword),
+      hasNumber: /[0-9]/.test(authPassword),
+      isMinLength: authPassword.length >= 8
+    });
+  }, [authPassword]);
 
   const handleAuth = async () => {
     setAuthError('');
@@ -160,13 +181,50 @@ const App = () => {
           return;
         }
 
+        if (emailAvailability === 'taken') {
+          setAuthError('Email is already registered.');
+          return;
+        }
+
+        const { hasUpper, hasLower, hasNumber, isMinLength } = passwordRequirements;
+        if (!hasUpper || !hasLower || !hasNumber || !isMinLength) {
+          setAuthError('Please meet all password requirements.');
+          return;
+        }
+
         // --- EMAIL DOMAIN CHECK START ---
         const domain = registerEmail.split('@')[1]?.toLowerCase();
         const allowedDomains = [
-          'gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
-          'yahoo.com', 'ymail.com', 'protonmail.com', 'proton.me', 'icloud.com', 'me.com', 'mac.com',
-          'tutamail.com', 'tutanota.com', 'yandex.ru', 'mail.ru', 'qq.com', '163.com'
+          // Google
+          'gmail.com', 'googlemail.com',
+          // Microsoft
+          'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'passport.com',
+          // Apple
+          'icloud.com', 'me.com', 'mac.com',
+          // Yahoo
+          'yahoo.com', 'ymail.com', 'rocketmail.com',
+          // Proton
+          'proton.me', 'protonmail.com', 'pm.me',
+          // Zoho
+          'zoho.com', 'zoho.in',
+          // Tutanota
+          'tutanota.com', 'tutanota.de', 'tutamail.com', 'tuta.io', 'tuta.com',
+          // GMX
+          'gmx.com', 'gmx.net', 'gmx.us', 'gmx.de',
+          // AOL
+          'aol.com',
+          // Mail.com
+          'mail.com',
+          // Fastmail
+          'fastmail.com', 'fastmail.fm', 'fastmail.jp', 'fastmail.net',
+          // Yandex
+          'yandex.com', 'yandex.ru', 'yandex.net', 'ya.ru',
+          // Mail.ru
+          'mail.ru', 'list.ru', 'bk.ru', 'inbox.ru',
+          // Others requested
+          'skiff.com', 'hushmail.com', 'hush.com'
         ];
+
         const isMajorProvider = allowedDomains.includes(domain) ||
           (domain && (
             (domain.startsWith('yahoo.') && domain !== 'yahoo.com') ||
@@ -175,9 +233,10 @@ const App = () => {
           ));
 
         if (!domain || !isMajorProvider) {
-          setAuthError('Please use a major email provider (Gmail, Outlook, Yahoo, etc.).');
+          setAuthError('Please use a trusted email provider (Gmail, Outlook, Yahoo, iCloud, etc.). Disposable or unknown domains are not allowed.');
           return;
         }
+        // --- EMAIL DOMAIN CHECK END ---
 
         await registerUser(registerEmail, authPassword, registerUsername);
         setRegistrationSuccess(true);
@@ -229,6 +288,10 @@ const App = () => {
             targetUser={chatTargetUser}
             messages={messages}
             onMarkRead={handleMarkRead}
+            onOpenProfile={(userId) => {
+              // Dispatch event to open profile
+              window.dispatchEvent(new CustomEvent('open-user-profile', { detail: { userId } }));
+            }}
           />
         )}
       </main>
@@ -282,10 +345,12 @@ const App = () => {
                 {authMode === 'register' && (
                   <div>
                     <div className="flex justify-between items-center mb-1">
-                      <label className="text-[10px] font-bold uppercase block">Username (Locked after setup)</label>
-                      {usernameAvailability === 'checking' && <span className="text-[9px] text-gray-400 animate-pulse">CHECKING...</span>}
-                      {usernameAvailability === 'available' && <span className="text-[9px] text-green-600 font-bold uppercase italic">Available</span>}
-                      {usernameAvailability === 'taken' && <span className="text-[9px] text-red-600 font-bold uppercase italic">Taken</span>}
+                      <label className="text-[10px] font-bold uppercase block">Username</label>
+                      <div className="flex items-center gap-1">
+                        {usernameAvailability === 'checking' && <span className="text-[9px] text-gray-400 animate-pulse">CHECKING...</span>}
+                        {usernameAvailability === 'available' && <CheckCircle2 size={12} className="text-blue-500" />}
+                        {usernameAvailability === 'taken' && <span className="text-[9px] text-red-600 font-bold uppercase italic">Not Available</span>}
+                      </div>
                     </div>
                     <Input
                       placeholder="e.g. creative_mind"
@@ -302,12 +367,19 @@ const App = () => {
                 <div>
                   <div className="flex justify-between items-center mb-1">
                     <label className="text-[10px] font-bold uppercase block">
-                      {authMode === 'login' ? 'Email Address' : 'Email Address'}
+                      {authMode === 'login' ? 'Email or Username' : 'Email Address'}
                     </label>
+                    {authMode === 'register' && (
+                      <div className="flex items-center gap-1">
+                        {emailAvailability === 'checking' && <span className="text-[9px] text-gray-400 animate-pulse">CHECKING...</span>}
+                        {emailAvailability === 'available' && <CheckCircle2 size={12} className="text-blue-500" />}
+                        {emailAvailability === 'taken' && <span className="text-[9px] text-red-600 font-bold uppercase italic">Already in Use</span>}
+                      </div>
+                    )}
                   </div>
                   <Input
-                    type="email"
-                    placeholder="name@example.com"
+                    type={authMode === 'login' ? 'text' : 'email'}
+                    placeholder={authMode === 'login' ? "Email or Username" : "name@example.com"}
                     value={authMode === 'login' ? loginIdentifier : registerEmail}
                     onChange={e => authMode === 'login' ? setLoginIdentifier(e.target.value) : setRegisterEmail(e.target.value)}
                   />
@@ -330,6 +402,27 @@ const App = () => {
                       {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
                     </button>
                   </div>
+
+                  {authMode === 'register' && (
+                    <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1">
+                      <div className={`text-[9px] flex items-center gap-1 ${passwordRequirements.isMinLength ? 'text-green-600' : 'text-gray-400'}`}>
+                        {passwordRequirements.isMinLength ? <CheckCircle2 size={10} /> : <div className="w-1.5 h-1.5 rounded-full border border-current" />}
+                        8+ Characters
+                      </div>
+                      <div className={`text-[9px] flex items-center gap-1 ${passwordRequirements.hasUpper ? 'text-green-600' : 'text-gray-400'}`}>
+                        {passwordRequirements.hasUpper ? <CheckCircle2 size={10} /> : <div className="w-1.5 h-1.5 rounded-full border border-current" />}
+                        Uppercase
+                      </div>
+                      <div className={`text-[9px] flex items-center gap-1 ${passwordRequirements.hasLower ? 'text-green-600' : 'text-gray-400'}`}>
+                        {passwordRequirements.hasLower ? <CheckCircle2 size={10} /> : <div className="w-1.5 h-1.5 rounded-full border border-current" />}
+                        Lowercase
+                      </div>
+                      <div className={`text-[9px] flex items-center gap-1 ${passwordRequirements.hasNumber ? 'text-green-600' : 'text-gray-400'}`}>
+                        {passwordRequirements.hasNumber ? <CheckCircle2 size={10} /> : <div className="w-1.5 h-1.5 rounded-full border border-current" />}
+                        Number
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {authError && (

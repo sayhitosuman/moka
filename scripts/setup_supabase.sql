@@ -5,6 +5,7 @@
 CREATE TABLE profiles (
     uid UUID REFERENCES auth.users ON DELETE CASCADE PRIMARY KEY,
     display_name TEXT UNIQUE,
+    email TEXT UNIQUE,
     full_name TEXT,
     photo_url TEXT,
     banner_url TEXT,
@@ -43,6 +44,7 @@ CREATE TABLE posts (
     author_photo TEXT,
     media_url TEXT,
     media_type TEXT CHECK (media_type IN ('image', 'video')),
+    media_items JSONB,
     likes INTEGER DEFAULT 0,
     space_id UUID REFERENCES spaces(id) ON DELETE SET NULL,
     space_handle TEXT,
@@ -188,10 +190,11 @@ CREATE POLICY "Users can join groups" ON chat_group_members FOR INSERT WITH CHEC
 CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger AS $$
 BEGIN
-  INSERT INTO public.profiles (uid, display_name, full_name, is_anonymous)
+  INSERT INTO public.profiles (uid, display_name, email, full_name, is_anonymous)
   VALUES (
     new.id, 
     COALESCE(new.raw_user_meta_data->>'display_name', 'User_' || substr(new.id::text, 1, 5)),
+    new.email,
     COALESCE(new.raw_user_meta_data->>'full_name', 'New Member'),
     false
   );

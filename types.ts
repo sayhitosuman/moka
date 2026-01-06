@@ -43,8 +43,9 @@ export interface Comment {
   userVote?: number; // 0 = none, 1 = up, -1 = down (Current user's vote)
   mediaUrl?: string; // URL to image or video
   mediaType?: 'image' | 'video';
+  mediaItems?: { url: string; type: 'image' | 'video' }[]; // For carousels
   spaceId?: string; // ID of the space this post belongs to
-  spaceHandle?: string; // Handle for display (g/dev)
+  spaceHandle?: string; // Handle for display (g:dev)
   location?: string; // For Reels/Blinks
   tags?: string[]; // For Reels/Blinks
 }
@@ -86,7 +87,7 @@ export type SpaceMemberStatus = 'pending' | 'accepted' | 'blocked';
 export interface Space {
   id: string;
   name: string;
-  handle: string; // e.g., @coding or g/dev
+  handle: string; // e.g., p:coding or g:dev
   description?: string;
   type: SpaceType;
   ownerId: string;

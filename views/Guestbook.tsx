@@ -1,9 +1,9 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { MessageSquare, ArrowBigUp, ArrowBigDown, Share2, User, Search, X, Settings, LogOut, Edit2, Trash2, Camera, Users, UserPlus, UserMinus, UserCheck, ChevronLeft, Send, ShieldCheck, Activity, MessageCircle, Menu, Filter, Image as ImageIcon, Paperclip, Loader, Copy, Download, Plus, Minimize2, Layout, PlaySquare, Compass, Heart, Bell, Check, Info } from 'lucide-react';
+import { MessageSquare, ArrowBigUp, ArrowBigDown, Share2, User, Search, X, Settings, LogOut, Edit2, Trash2, Camera, Users, UserPlus, UserMinus, UserCheck, ChevronLeft, ChevronRight, ArrowRight, Send, ShieldCheck, Activity, MessageCircle, Menu, Filter, Image as ImageIcon, Paperclip, Loader, Copy, Download, Plus, Minimize2, Layout, PlaySquare, Compass, Heart, Bell, Check, Info } from 'lucide-react';
 import { UserProfile, Comment, Space, AppNotification } from '../types';
 import {
-  subscribeToStream, postThought, votePost, updateUserProfile, deletePost, getPublicUserProfile, sendFriendRequest, acceptFriendRequest, declineFriendRequest, unfriend, fetchUserNetwork, fetchSpaces, createSpace, subscribeToNotifications, markNotificationRead, fetchNotifications, globalSearch, SearchResult, fetchIsMember, joinSpace, leaveSpace, fetchUserSpaces, fetchSpaceMembers, updateSpace, respondToSpaceRequest, giveAdminRole, fetchSpaceMembership, fetchPendingMembers, subscribeToFeed, uploadMedia, removeMember, fetchUserPosts
+  subscribeToStream, postThought, votePost, updateUserProfile, deletePost, getPublicUserProfile, sendFriendRequest, acceptFriendRequest, declineFriendRequest, unfriend, fetchUserNetwork, fetchSpaces, createSpace, subscribeToNotifications, markNotificationRead, fetchNotifications, globalSearch, SearchResult, fetchIsMember, joinSpace, leaveSpace, fetchUserSpaces, fetchSpaceMembers, updateSpace, respondToSpaceRequest, giveAdminRole, fetchSpaceMembership, fetchPendingMembers, subscribeToFeed, uploadMedia, removeMember, fetchUserPosts, togglePinPost
 } from '../services/store';
 import { Window, Button, Input, Modal, THEME, ToastContainer } from '../components/UI';
 import { toBlob } from 'html-to-image';
@@ -12,6 +12,14 @@ const formatDate = (timestamp: any) => {
   if (!timestamp) return '...';
   const date = timestamp.toDate ? timestamp.toDate() : new Date(timestamp);
   return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+};
+
+const formatHandle = (handle: string | undefined, type: 'group' | 'page' | 'user' | 'club') => {
+  if (!handle) return '';
+  // Remove any legacy prefixes or the target prefix to prevent doubling
+  const clean = handle.replace(/^([gu]:|p:|c:|g\/|@)/i, '');
+  const prefix = type === 'group' ? 'g:' : type === 'page' ? 'p:' : type === 'user' ? 'u:' : 'c:';
+  return prefix + clean;
 };
 
 // --- INLINE INPUT COMPONENT ---
@@ -23,7 +31,7 @@ const InlineInput = ({
   autoFocus = false,
   className = ""
 }: {
-  onSubmit: (text: string, file?: File) => void;
+  onSubmit: (text: string, files?: File[]) => void;
   onCancel?: () => void;
   placeholder?: string;
   buttonLabel?: string;
@@ -31,25 +39,38 @@ const InlineInput = ({
   className?: string;
 }) => {
   const [text, setText] = useState('');
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<string | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [previews, setPreviews] = useState<{ url: string, type: string }[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const handleSubmit = () => {
-    if (!text.trim() && !file) return;
-    onSubmit(text, file || undefined);
+    if (!text.trim() && files.length === 0) return;
+    onSubmit(text, files.length > 0 ? files : undefined);
     setText('');
-    setFile(null);
-    setPreview(null);
+    setFiles([]);
+    previews.forEach(p => URL.revokeObjectURL(p.url));
+    setPreviews([]);
     if (onCancel) onCancel();
   };
 
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) {
-      setFile(f);
-      setPreview(URL.createObjectURL(f));
+    const selectedFiles = Array.from(e.target.files || []);
+    if (selectedFiles.length > 0) {
+      const newFiles = [...files, ...selectedFiles];
+      setFiles(newFiles);
+
+      const newPreviews = selectedFiles.map(f => ({
+        url: URL.createObjectURL(f),
+        type: f.type
+      }));
+      setPreviews([...previews, ...newPreviews]);
     }
+  };
+
+  const removeFile = (index: number) => {
+    URL.revokeObjectURL(previews[index].url);
+    setFiles(prev => prev.filter((_, i) => i !== index));
+    setPreviews(prev => prev.filter((_, i) => i !== index));
   };
 
   return (
@@ -64,21 +85,25 @@ const InlineInput = ({
           if (e.key === 'Enter' && e.ctrlKey) handleSubmit();
         }}
       />
-      {preview && (
-        <div className="mt-2 relative inline-block">
-          {file?.type.startsWith('video') ? (
-            <video src={preview} className="h-20 w-auto border border-black" muted />
-          ) : (
-            <img src={preview} className="h-20 w-auto border border-black object-cover" />
-          )}
-          <button onClick={() => { setFile(null); setPreview(null); }} className="absolute -top-2 -right-2 bg-black text-white rounded-full p-0.5 shadow-md">
-            <X size={10} />
-          </button>
+      {previews.length > 0 && (
+        <div className="mt-2 flex gap-2 overflow-x-auto pb-2 no-scrollbar">
+          {previews.map((p, idx) => (
+            <div key={idx} className="relative shrink-0">
+              {p.type.startsWith('video') ? (
+                <video src={p.url} className="h-20 w-32 object-cover border border-black" muted />
+              ) : (
+                <img src={p.url} className="h-20 w-32 border border-black object-cover" />
+              )}
+              <button onClick={() => removeFile(idx)} className="absolute -top-2 -right-2 bg-black text-white rounded-full p-0.5 shadow-md">
+                <X size={10} />
+              </button>
+            </div>
+          ))}
         </div>
       )}
       <div className="flex justify-between items-center mt-2">
         <div className="flex gap-2">
-          <input type="file" ref={fileRef} className="hidden" accept="image/*,video/*" onChange={handleFile} />
+          <input type="file" ref={fileRef} className="hidden" accept="image/*,video/*" multiple onChange={handleFile} />
           <button onClick={() => fileRef.current?.click()} className="p-1.5 text-gray-400 hover:text-black hover:bg-gray-100 rounded-lg transition-colors">
             <ImageIcon size={16} />
           </button>
@@ -104,7 +129,78 @@ interface ThreadItemProps {
   currentUserId?: string;
   onDelete?: (id: string) => void;
   onShare: (thread: Comment) => void;
+  onSpaceClick?: (spaceId: string) => void;
+  onPin?: (id: string, currentlyPinned: boolean) => void;
+  isSpaceAdmin?: boolean;
 }
+
+const MediaCarousel: React.FC<{ items: { url: string; type: 'image' | 'video' }[] }> = ({ items }) => {
+  const [currentIndex, setCurrentIndex] = useState(0);
+
+  if (!items || items.length === 0) return null;
+
+  const handleNext = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCurrentIndex((prev) => (prev + 1) % items.length);
+  };
+
+  const handlePrev = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCurrentIndex((prev) => (prev - 1 + items.length) % items.length);
+  };
+
+  const currentItem = items[currentIndex];
+
+  return (
+    <div className="mt-4 mb-3 rounded-2xl overflow-hidden border border-gray-100 bg-black shadow-inner group/media relative max-w-2xl mx-auto aspect-square md:aspect-video flex items-center justify-center">
+      {currentItem.type === 'video' ? (
+        <video
+          src={currentItem.url}
+          controls
+          className="w-full h-full object-contain"
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : (
+        <img
+          src={currentItem.url}
+          alt="attachment"
+          className="w-full h-full object-contain transition-transform duration-700 hover:scale-[1.02]"
+          onClick={(e) => e.stopPropagation()}
+        />
+      )}
+
+      {items.length > 1 && (
+        <>
+          <button
+            onClick={handlePrev}
+            className="absolute left-2 top-1/2 -translate-y-1/2 bg-white/20 hover:bg-white/40 backdrop-blur-md text-white p-1.5 rounded-full transition-all opacity-0 group-hover/media:opacity-100"
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <button
+            onClick={handleNext}
+            className="absolute right-2 top-1/2 -translate-y-1/2 bg-white/20 hover:bg-white/40 backdrop-blur-md text-white p-1.5 rounded-full transition-all opacity-0 group-hover/media:opacity-100"
+          >
+            <ChevronRight size={20} />
+          </button>
+
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-1.5">
+            {items.map((_, i) => (
+              <div
+                key={i}
+                className={`w-1.5 h-1.5 rounded-full transition-all ${i === currentIndex ? 'bg-white scale-125' : 'bg-white/40'}`}
+              />
+            ))}
+          </div>
+
+          <div className="absolute top-4 right-4 bg-black/50 backdrop-blur-md text-white text-[10px] font-bold px-2 py-1 rounded-full px-2">
+            {currentIndex + 1} / {items.length}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 
 const ThreadItem: React.FC<ThreadItemProps> = ({
   thread,
@@ -114,7 +210,10 @@ const ThreadItem: React.FC<ThreadItemProps> = ({
   onChat,
   currentUserId,
   onDelete,
-  onShare
+  onShare,
+  onSpaceClick,
+  onPin,
+  isSpaceAdmin
 }) => {
 
   const handleVote = (e: React.MouseEvent, val: number) => {
@@ -144,12 +243,17 @@ const ThreadItem: React.FC<ThreadItemProps> = ({
     onShare(thread);
   }
 
+  const handleSpaceClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (thread.spaceId && onSpaceClick) onSpaceClick(thread.spaceId);
+  }
+
   const isMe = currentUserId === thread.authorId;
 
   return (
     <div
       onClick={onClick}
-      className={`group border-b border-gray-100 p-5 md:p-6 transition-all duration-300 cursor-pointer flex gap-5 last:border-0 hover:bg-[#fafafa] relative bg-white`}
+      className={`group border-b border-gray-100 p-4 md:p-5 transition-all duration-300 cursor-pointer flex gap-4 last:border-0 hover:bg-[#fafafa] relative bg-white`}
     >
       {/* Interaction Column: Votes */}
       <div className="flex flex-col items-center gap-1.5 min-w-[36px] pt-1 shrink-0">
@@ -186,12 +290,17 @@ const ThreadItem: React.FC<ThreadItemProps> = ({
               onClick={handleUserClick}
               className={`text-[11px] font-black tracking-wide hover:underline transition-colors flex items-center gap-1 text-white bg-black px-1.5 py-0.5 rounded-md shadow-sm`}
             >
-              #{thread.authorName}
+              {thread.spaceId ? 'm:' : 'u:'}{thread.authorName}
             </button>
             {thread.spaceHandle && (
               <>
                 <span className="text-[10px] text-gray-300 mt-0.5">•</span>
-                <span className="text-[10px] font-black text-blue-600 mt-0.5 lowercase tracking-tight">{thread.spaceHandle}</span>
+                <button
+                  onClick={handleSpaceClick}
+                  className="text-[12px] font-black text-blue-600 mt-0.5 lowercase tracking-tight bg-blue-50 px-2 py-0.5 rounded-full hover:bg-blue-100 transition-colors border border-blue-100 shadow-sm"
+                >
+                  {formatHandle(thread.spaceHandle, thread.tags?.includes('PAGE') ? 'page' : 'group')}
+                </button>
               </>
             )}
             <span className="text-[10px] text-gray-400 mt-0.5">•</span>
@@ -216,8 +325,10 @@ const ThreadItem: React.FC<ThreadItemProps> = ({
           {thread.text}
         </p>
 
-        {/* Media Preview (Enhanced) */}
-        {thread.mediaUrl && (
+        {/* Media Preview (Enriched Carousel) */}
+        {thread.mediaItems && thread.mediaItems.length > 0 ? (
+          <MediaCarousel items={thread.mediaItems} />
+        ) : thread.mediaUrl ? (
           <div className="mt-4 mb-3 rounded-2xl overflow-hidden border border-gray-100 bg-black/5 shadow-inner group/media relative max-w-2xl">
             {thread.mediaType === 'video' ? (
               <video
@@ -234,7 +345,7 @@ const ThreadItem: React.FC<ThreadItemProps> = ({
               />
             )}
           </div>
-        )}
+        ) : null}
 
         {/* Action Bar */}
         <div className="flex items-center gap-5 mt-4">
@@ -258,6 +369,17 @@ const ThreadItem: React.FC<ThreadItemProps> = ({
               <MessageCircle size={14} strokeWidth={2.5} /> Message
             </button>
           )}
+
+          {isSpaceAdmin && onPin && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onPin(thread.id, thread.tags?.includes('PIN') || false); }}
+              className={`flex items-center gap-1.5 text-xs font-bold transition-colors py-1 px-1.5 rounded-md border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-y-[1px] active:shadow-none ${thread.tags?.includes('PIN') ? 'bg-yellow-400 text-black' : 'bg-white text-gray-400 hover:text-black'}`}
+              title={thread.tags?.includes('PIN') ? 'Unpin' : 'Pin'}
+            >
+              <Plus size={14} strokeWidth={2.5} className={thread.tags?.includes('PIN') ? 'rotate-45' : ''} />
+              {thread.tags?.includes('PIN') ? 'PINNED' : 'PIN'}
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -266,7 +388,7 @@ const ThreadItem: React.FC<ThreadItemProps> = ({
 
 interface CommentNodeProps {
   c: Comment;
-  onReply: (text: string, parentId: string) => void;
+  onReply: (text: string, parentId: string, files?: File[]) => void;
   onUserClick: (id: string) => void;
   canPost: boolean;
 }
@@ -286,8 +408,9 @@ const CommentNode: React.FC<CommentNodeProps> = ({ c, onReply, onUserClick, canP
             <Plus size={12} strokeWidth={3} />
           </button>
           <button onClick={() => onUserClick(c.authorId)} className={`text-[11px] font-bold opacity-60 flex items-center gap-1 text-gray-900`}>
-            #{c.authorName}
+            {c.spaceId ? 'm:' : 'u:'}{c.authorName}
           </button>
+          {c.tags?.includes('PIN') && <span className="text-[8px] font-black bg-yellow-400 px-1 border border-black uppercase tracking-widest">Pinned</span>}
           <span className="text-[10px] text-gray-300 font-medium">Collapsed thread ({c.children.length + 1} items)</span>
         </div>
       </div>
@@ -305,7 +428,7 @@ const CommentNode: React.FC<CommentNodeProps> = ({ c, onReply, onUserClick, canP
             {c.authorPhoto ? <img src={c.authorPhoto} className="w-full h-full object-cover rounded-full" /> : c.authorName[0]}
           </div>
           <button onClick={() => onUserClick(c.authorId)} className={`text-[11px] font-black tracking-tight hover:underline flex items-center gap-1 text-gray-900`}>
-            #{c.authorName}
+            {c.spaceId ? 'm:' : 'u:'}{c.authorName}
           </button>
           <span className="text-[10px] text-gray-400">•</span>
           <span className="text-[10px] text-gray-400 font-medium">{formatDate(c.createdAt)}</span>
@@ -336,7 +459,7 @@ const CommentNode: React.FC<CommentNodeProps> = ({ c, onReply, onUserClick, canP
       {isReplying && (
         <div className="mt-3 animate-slide-up">
           <InlineInput
-            onSubmit={(text) => { onReply(text, c.id); setIsReplying(false); }}
+            onSubmit={(text, files) => { onReply(text, c.id, files); setIsReplying(false); }}
             onCancel={() => setIsReplying(false)}
             autoFocus
             placeholder={`Replying to ${c.authorName}...`}
@@ -370,7 +493,8 @@ export const UserProfileModal = ({
   onNavigate,
   onChat,
   onDeletePost,
-  onOpenThread
+  onOpenThread,
+  onToast
 }: {
   currentUser: UserProfile | null,
   targetUserId: string | null,
@@ -381,7 +505,8 @@ export const UserProfileModal = ({
   onNavigate: (uid: string) => void,
   onChat: (uid: string) => void,
   onDeletePost: (id: string) => void,
-  onOpenThread: (id: string) => void
+  onOpenThread: (id: string) => void,
+  onToast?: (msg: string, type?: 'success' | 'error' | 'info') => void
 }) => {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -471,7 +596,7 @@ export const UserProfileModal = ({
       setBannerFile(null);
     } catch (e) {
       console.error(e);
-      showToast("Failed to update profile", 'error');
+      if (onToast) onToast("Failed to update profile", 'error');
     } finally {
       setIsSaving(false);
     }
@@ -521,11 +646,43 @@ export const UserProfileModal = ({
   const pages = userSpaces.filter(s => s.type === 'page');
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={loading ? "DATA_LINK..." : `PROFILE: #${profile?.displayName || 'USER'}`} maxWidth="max-w-4xl">
+    <Modal isOpen={isOpen} onClose={onClose} title={loading ? "DATA_LINK..." : `PROFILE: u:${profile?.displayName || 'USER'}`} maxWidth="max-w-4xl">
       {loading ? (
-        <div className="h-[400px] flex flex-col items-center justify-center gap-4 bg-white">
-          <div className="w-12 h-12 border-4 border-black border-t-transparent animate-spin"></div>
-          <span className="text-[10px] font-black tracking-widest text-black uppercase">SYNCING_NODE_DATA</span>
+        <div className="flex flex-col h-[80vh] bg-white border-t border-black overflow-hidden relative animate-pulse">
+          {/* Banner Skeleton */}
+          <div className="h-32 md:h-40 bg-gray-200 border-b-2 border-black w-full" />
+
+          {/* Info Skeleton */}
+          <div className="p-6 pt-0 bg-[#f4f4f5] border-b-2 border-black">
+            <div className="flex flex-col md:flex-row items-start gap-8 -mt-12">
+              {/* Avatar Skeleton */}
+              <div className="w-32 h-32 bg-gray-300 border-4 border-black shadow-[6px_6px_0px_0px_rgba(0,0,0,1)] shrink-0" />
+
+              {/* Text Skeletons */}
+              <div className="flex-1 mt-14 space-y-4 w-full">
+                <div className="h-8 w-48 bg-gray-300 border-2 border-black/10" />
+                <div className="flex gap-2">
+                  <div className="h-6 w-24 bg-gray-200 border border-black/5" />
+                  <div className="h-6 w-24 bg-gray-200 border border-black/5" />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Content Skeleton */}
+          <div className="p-6 space-y-4">
+            <div className="h-4 w-full max-w-md bg-gray-100 rounded" />
+            <div className="h-4 w-3/4 max-w-sm bg-gray-100 rounded" />
+            <div className="grid grid-cols-3 gap-2 mt-8">
+              <div className="aspect-square bg-gray-100 border border-black/5" />
+              <div className="aspect-square bg-gray-100 border border-black/5" />
+              <div className="aspect-square bg-gray-100 border border-black/5" />
+            </div>
+          </div>
+
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <span className="bg-black text-white px-3 py-1 text-[10px] font-black tracking-widest uppercase shadow-lg">SYNCING_PROFILE_DATA...</span>
+          </div>
         </div>
       ) : !profile ? (
         <div className="h-[400px] flex flex-col items-center justify-center gap-4 bg-white">
@@ -547,7 +704,7 @@ export const UserProfileModal = ({
                     </div>
                     <div className="flex-1">
                       <div className="font-black text-sm uppercase tracking-tight">{u.fullName || u.displayName}</div>
-                      <div className="text-[10px] font-black text-gray-400">#{u.displayName}</div>
+                      <div className="text-[10px] font-black text-gray-400">u:{u.displayName}</div>
                     </div>
                     <button className="p-2 border-2 border-black bg-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] font-black text-[10px]">VIEW</button>
                   </div>
@@ -848,8 +1005,8 @@ export const MindStream = ({
   const canPost = !!user;
   const [title, setTitle] = useState('');
   const [text, setText] = useState('');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [filePreview, setFilePreview] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [filePreviews, setFilePreviews] = useState<{ url: string; type: string }[]>([]);
   const [isPosting, setIsPosting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -873,7 +1030,10 @@ export const MindStream = ({
   const [openedBlinkId, setOpenedBlinkId] = useState<string | null>(null);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [isSearchExpanded, setIsSearchExpanded] = useState(false);
-  const [dashboardTab, setDashboardTab] = useState<'suggested' | 'mine' | 'following'>('suggested');
+  const [dashboardTab, setDashboardTab] = useState<'suggested' | 'mine' | 'following' | 'directory'>('suggested');
+  const [directorySearch, setDirectorySearch] = useState('');
+  const [directoryFilter, setDirectoryFilter] = useState<'all' | 'group' | 'page'>('all');
+  const [directoryTag, setDirectoryTag] = useState<string | null>(null);
   const [isMemberOfActiveSpace, setIsMemberOfActiveSpace] = useState(false);
   const [userSpaceRole, setUserSpaceRole] = useState<'member' | 'admin' | 'owner' | null>(null);
   const [userSpaceStatus, setUserSpaceStatus] = useState<'pending' | 'accepted' | 'blocked' | null>(null);
@@ -885,6 +1045,23 @@ export const MindStream = ({
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const bannerInputRef = useRef<HTMLInputElement>(null);
   const [isUpdatingSpace, setIsUpdatingSpace] = useState(false);
+  const [recentSpaceIds, setRecentSpaceIds] = useState<string[]>([]);
+
+  // Update recent spaces
+  useEffect(() => {
+    if (activeSpace) {
+      setRecentSpaceIds(prev => {
+        const filtered = prev.filter(id => id !== activeSpace.id);
+        return [activeSpace.id, ...filtered].slice(0, 3);
+      });
+    }
+  }, [activeSpace]);
+
+  // Dashboard Expansion States
+  const [showAllSuggestedGroups, setShowAllSuggestedGroups] = useState(false);
+  const [showAllSuggestedPages, setShowAllSuggestedPages] = useState(false);
+  const [showAllMySpaces, setShowAllMySpaces] = useState(false);
+  const [showAllFollowing, setShowAllFollowing] = useState(false);
 
   const isSpaceAdmin = (userSpaceRole === 'admin' || userSpaceRole === 'owner') || (activeSpace && user && activeSpace.ownerId === user.uid);
   const isSpaceOwner = userSpaceRole === 'owner' || (activeSpace && user && activeSpace.ownerId === user.uid);
@@ -983,6 +1160,19 @@ export const MindStream = ({
     }
   }, [initialProfileId]);
 
+  // Listen for open-user-profile event (e.g. from ChatWidget)
+  useEffect(() => {
+    const handleOpenProfile = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail && detail.userId) {
+        console.log('Received open-user-profile event:', detail.userId);
+        setProfileTargetId(detail.userId);
+      }
+    };
+    window.addEventListener('open-user-profile', handleOpenProfile);
+    return () => window.removeEventListener('open-user-profile', handleOpenProfile);
+  }, []);
+
   // Update active thread if prop changes (Deep Linking)
   useEffect(() => {
     if (initialThreadId) {
@@ -1047,31 +1237,45 @@ export const MindStream = ({
 
   // Handle file selection
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      // Basic size validation (e.g., 50MB)
-      if (file.size > 50 * 1024 * 1024) {
-      showToast("File too large. Max size 50MB.", 'error');
-        return;
-      }
-      setSelectedFile(file);
-      setFilePreview(URL.createObjectURL(file));
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      const validFiles = files.filter(f => {
+        if (f.size > 50 * 1024 * 1024) {
+          showToast(`File ${f.name} too large. Max size 50MB.`, 'error');
+          return false;
+        }
+        return true;
+      });
+
+      setSelectedFiles(prev => [...prev, ...validFiles]);
+      const newPreviews = validFiles.map(f => ({
+        url: URL.createObjectURL(f),
+        type: f.type
+      }));
+      setFilePreviews(prev => [...prev, ...newPreviews]);
     }
   };
 
   const clearFile = () => {
-    setSelectedFile(null);
-    setFilePreview(null);
+    filePreviews.forEach(p => URL.revokeObjectURL(p.url));
+    setSelectedFiles([]);
+    setFilePreviews([]);
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const removeSelectedFile = (index: number) => {
+    URL.revokeObjectURL(filePreviews[index].url);
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+    setFilePreviews(prev => prev.filter((_, i) => i !== index));
   };
 
   // Handle creating a NEW thread
   const handlePost = async () => {
-    if (!user || (!text && !selectedFile)) return;
+    if (!user || (!text && selectedFiles.length === 0)) return;
     setIsPosting(true);
     try {
       // If we are in a space, associate the post with it
-      await postThought(text, user, null, title, selectedFile || undefined, activeSpace?.id);
+      await postThought(text, user, null, title, selectedFiles, activeSpace?.id, undefined, undefined, activeSpace?.handle);
       setText('');
       setTitle('');
       clearFile();
@@ -1084,11 +1288,11 @@ export const MindStream = ({
   };
 
   const handlePostReel = async () => {
-    if (!user || !selectedFile) return;
+    if (!user || selectedFiles.length === 0) return;
     setIsPosting(true);
     try {
       const tags = reelTags.split(/[,\s]+/).map(t => t.startsWith('#') ? t : `#${t}`).filter(t => t.length > 1);
-      await postThought(text, user, null, title, selectedFile, undefined, reelLocation, tags);
+      await postThought(text, user, null, title, selectedFiles, activeSpace?.id, reelLocation, tags, activeSpace?.handle);
       setText('');
       setTitle('');
       setReelLocation('');
@@ -1118,11 +1322,21 @@ export const MindStream = ({
         if (video.duration > 61) {
           showToast("Note: This video is longer than 60 seconds. Only the first 60 seconds will be featured in the collective feed.", 'info');
         }
-        setSelectedFile(file);
-        setFilePreview(URL.createObjectURL(file));
+        setSelectedFiles([file]);
+        setFilePreviews([{ url: URL.createObjectURL(file), type: file.type }]);
         setReelStep(2); // Auto proceed to next step
       };
       video.src = URL.createObjectURL(file);
+    }
+  };
+
+  const handleSpaceClick = (spaceId: string) => {
+    const space = spaces.find(s => s.id === spaceId);
+    if (space) {
+      setActiveSpace(space);
+      setActiveView('spaces');
+      setActiveThreadId(null);
+      setProfileTargetId(null);
     }
   };
 
@@ -1132,7 +1346,7 @@ export const MindStream = ({
     try {
       const freshSpace = await createSpace({
         name: newSpaceName,
-        handle: (newSpaceType === 'group' ? 'g/' : '@') + newSpaceHandle,
+        handle: (newSpaceType === 'group' ? 'g:' : 'p:') + newSpaceHandle,
         description: newSpaceDesc,
         type: newSpaceType,
         owner_id: user.uid
@@ -1157,6 +1371,28 @@ export const MindStream = ({
       showToast(e.message || "Failed to create space. Please try again.", 'error');
     } finally {
       setIsCreatingSpace(false);
+    }
+  };
+
+  const handleTogglePin = async (id: string, currentlyPinned: boolean) => {
+    try {
+      await togglePinPost(id, !currentlyPinned);
+      showToast(currentlyPinned ? "Unpinned from space." : "Pinned to space.", 'success');
+      // Refresh local state
+      setThoughts(prev => prev.map(t => t.id === id ? { ...t, tags: currentlyPinned ? (t.tags || []).filter(v => v !== 'PIN') : [...(t.tags || []), 'PIN'] } : t));
+    } catch (e: any) {
+      showToast(e.message, 'error');
+    }
+  };
+
+  const handleRemoveMember = async (sid: string, uid: string) => {
+    if (!window.confirm("Remove this member from the space?")) return;
+    try {
+      await removeMember(sid, uid);
+      setSpaceMembers(prev => prev.filter(m => m.uid !== uid));
+      showToast("Member removed.", 'info');
+    } catch (e: any) {
+      showToast(e.message, 'error');
     }
   };
 
@@ -1223,13 +1459,13 @@ export const MindStream = ({
   };
 
   // Handle inline comments/replies
-  const handleInlinePost = async (text: string, parentId: string | null, file?: File) => {
+  const handleInlinePost = async (text: string, parentId: string | null, files?: File[]) => {
     if (!user) {
       onOpenLogin();
       return;
     }
     try {
-      await postThought(text, user, parentId, undefined, file);
+      await postThought(text, user, parentId, undefined, files, activeSpace?.id, undefined, undefined, activeSpace?.handle);
     } catch (e: any) {
       showToast(`Failed to reply: ${e.message}`, 'error');
     }
@@ -1273,34 +1509,26 @@ export const MindStream = ({
   };
 
   const filteredThoughts = thoughts.filter(t => {
-    // We now allow space-related posts in the main stream if they are ranked highly enough by the feed algorithm
-    if (activeView === 'stream' && t.spaceId) {
-      // Optional: more logic here if we wanted to limit it, but for now we keep it global
-    }
-
     if (!searchQuery) return true;
     const q = searchQuery.toLowerCase().trim();
 
-    // Prefix Search Logic
-    if (q.startsWith('#')) {
-      // User search
-      const targetUser = q.slice(1);
-      return t.authorName.toLowerCase().includes(targetUser);
+    if (q.startsWith('u:')) {
+      const targetUser = q.slice(2);
+      return t.authorName.toLowerCase().includes(targetUser) && !t.spaceId;
     }
-    if (q.startsWith('@')) {
-      // Page/Space search
-      // Note: Threads don't currently have space info in this filter, but we search title/text as fallback
-      const targetPage = q.slice(1);
-      return (t.title && t.title.toLowerCase().includes(targetPage)) || t.text.toLowerCase().includes(targetPage);
+    if (q.startsWith('m:')) {
+      const targetUser = q.slice(2);
+      return t.authorName.toLowerCase().includes(targetUser) && !!t.spaceId;
     }
-    if (q.startsWith('g/')) {
-      // Group search
+    if (q.startsWith('p:')) {
+      const targetPage = q.slice(2);
+      return (t.spaceHandle && formatHandle(t.spaceHandle, 'page').toLowerCase().includes(targetPage)) || (t.title && t.title.toLowerCase().includes(targetPage)) || t.text.toLowerCase().includes(targetPage);
+    }
+    if (q.startsWith('g:')) {
       const targetGroup = q.slice(2);
-      // For now, search content for group mentions or title
-      return (t.title && t.title.toLowerCase().includes(targetGroup)) || t.text.toLowerCase().includes(targetGroup);
+      return (t.spaceHandle && formatHandle(t.spaceHandle, 'group').toLowerCase().includes(targetGroup)) || (t.title && t.title.toLowerCase().includes(targetGroup)) || t.text.toLowerCase().includes(targetGroup);
     }
 
-    // Default: search all
     return (
       (t.title && t.title.toLowerCase().includes(q)) ||
       t.text.toLowerCase().includes(q) ||
@@ -1376,12 +1604,12 @@ export const MindStream = ({
                   className="w-full group flex items-center gap-3 p-3 rounded-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-black/5 transition-all duration-300 text-left relative overflow-hidden"
                 >
                   <div className="absolute inset-0 bg-gradient-to-br from-gray-50/0 to-gray-50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
-                  <div className="relative w-9 h-9 bg-black rounded-full overflow-hidden text-white flex items-center justify-center shrink-0 shadow-inner">
-                    {user?.photoURL ? <img src={user.photoURL} alt="avi" className="w-full h-full object-cover" /> : <User size={18} />}
+                  <div className="relative w-8 h-8 bg-black rounded-full overflow-hidden text-white flex items-center justify-center shrink-0 shadow-inner">
+                    {user?.photoURL ? <img src={user.photoURL} alt="avi" className="w-full h-full object-cover" /> : <User size={16} />}
                   </div>
                   <div className="relative min-w-0 flex-1">
-                    <div className="text-[12px] font-black text-gray-900 truncate tracking-tight">{user.fullName || user.displayName}</div>
-                    <div className="text-[10px] text-gray-500 font-medium truncate">#{user.displayName}</div>
+                    <div className="text-[11px] font-black text-gray-900 truncate tracking-tight">{user.fullName || user.displayName}</div>
+                    <div className="text-[9px] text-gray-400 font-medium truncate">u:{user.displayName}</div>
                   </div>
                   <Settings size={14} className="relative text-gray-300 group-hover:text-black transition-colors" />
                 </button>
@@ -1451,7 +1679,38 @@ export const MindStream = ({
                 </button>
               </div>
               <div className="space-y-2">
-                {spaces.length > 0 ? spaces.slice(0, 3).map(space => (
+                {recentSpaceIds.length > 0 ? recentSpaceIds.map(id => {
+                  const space = spaces.find(s => s.id === id);
+                  if (!space) return null;
+                  return (
+                    <button
+                      key={space.id}
+                      onClick={() => {
+                        setActiveView('spaces');
+                        setActiveSpace(space);
+                        setIsSidebarOpen(false);
+                      }}
+                      className="w-full group flex items-center gap-3 p-2 rounded-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-black/5 transition-all duration-300 text-left relative overflow-hidden"
+                    >
+                      <div className="absolute inset-0 bg-gradient-to-br from-gray-50/0 to-gray-50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+
+                      <div className="relative w-7 h-7 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-400 shrink-0 group-hover:bg-black group-hover:text-white group-hover:border-black transition-all duration-300 overflow-hidden">
+                        {space.avatarURL ? (
+                          <img src={space.avatarURL} alt={space.name} className="w-full h-full object-cover" />
+                        ) : (
+                          space.type === 'group' ? <Users size={12} /> : <Layout size={12} />
+                        )}
+                      </div>
+
+                      <div className="relative min-w-0 flex-1">
+                        <div className="text-[10px] font-black text-black truncate tracking-tight mb-0">{space.name}</div>
+                        <div className="text-[8px] text-gray-400 uppercase font-black tracking-wider truncate">{formatHandle(space.handle, space.type)}</div>
+                      </div>
+
+                      <ChevronLeft size={10} className="relative text-gray-300 rotate-180 group-hover:text-black transition-colors" />
+                    </button>
+                  );
+                }) : spaces.slice(0, 3).map(space => (
                   <button
                     key={space.id}
                     onClick={() => {
@@ -1459,36 +1718,32 @@ export const MindStream = ({
                       setActiveSpace(space);
                       setIsSidebarOpen(false);
                     }}
-                    className="w-full group flex items-center gap-3 p-2.5 rounded-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-black/5 transition-all duration-300 text-left relative overflow-hidden"
+                    className="w-full group flex items-center gap-3 p-2 rounded-2xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-black/5 transition-all duration-300 text-left relative overflow-hidden"
                   >
                     <div className="absolute inset-0 bg-gradient-to-br from-gray-50/0 to-gray-50 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
 
-                    <div className="relative w-9 h-9 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-400 shrink-0 group-hover:bg-black group-hover:text-white group-hover:border-black transition-all duration-300">
-                      {space.type === 'group' ? <Users size={16} /> : <Layout size={16} />}
+                    <div className="relative w-7 h-7 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-400 shrink-0 group-hover:bg-black group-hover:text-white group-hover:border-black transition-all duration-300 overflow-hidden">
+                      {space.avatarURL ? (
+                        <img src={space.avatarURL} alt={space.name} className="w-full h-full object-cover" />
+                      ) : (
+                        space.type === 'group' ? <Users size={12} /> : <Layout size={12} />
+                      )}
                     </div>
 
                     <div className="relative min-w-0 flex-1">
-                      <div className="text-[11px] font-black text-black truncate tracking-tight mb-0.5">{space.name}</div>
-                      <div className="flex items-center gap-1.5">
-                        <span className="text-[9px] text-gray-500 uppercase font-black tracking-wider">{space.handle}</span>
-                        <span className="text-[9px] text-gray-400">•</span>
-                        <span className="text-[9px] text-gray-600 font-bold whitespace-nowrap">
-                          {space.type === 'group' ? `${space.memberCount || 1} members` : `${space.followerCount || 1} followers`}
-                        </span>
-                      </div>
+                      <div className="text-[10px] font-black text-black truncate tracking-tight mb-0">{space.name}</div>
+                      <div className="text-[8px] text-gray-400 uppercase font-black tracking-wider truncate">{formatHandle(space.handle, space.type)}</div>
                     </div>
 
-                    <ChevronLeft size={12} className="relative text-gray-300 rotate-180 group-hover:text-black transition-colors" />
+                    <ChevronLeft size={10} className="relative text-gray-300 rotate-180 group-hover:text-black transition-colors" />
                   </button>
-                )) : (
-                  <div className="py-2 text-[10px] text-gray-400 italic">No spaces joined yet.</div>
-                )}
+                ))}
 
                 <button
                   onClick={() => { setActiveView('spaces'); setActiveSpace(null); setIsSidebarOpen(false); }}
-                  className="w-full py-3 bg-white border border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] text-[10px] font-black text-black hover:bg-green-50 active:translate-x-[2px] active:translate-y-[2px] active:shadow-none tracking-[0.2em] uppercase transition-all flex items-center justify-center gap-2"
+                  className="w-full py-2 bg-white border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] text-[9px] font-black text-black hover:bg-green-50 active:translate-x-[1px] active:translate-y-[1px] active:shadow-none tracking-[0.2em] uppercase transition-all flex items-center justify-center gap-2 rounded-lg"
                 >
-                  <Compass size={14} strokeWidth={2.5} /> EXPLORE_SPACES
+                  <Compass size={12} strokeWidth={2.5} /> EXPLORE_DIRECTORY
                 </button>
               </div>
             </div>
@@ -1695,32 +1950,25 @@ export const MindStream = ({
                           setIsMobileSearchOpen(false);
                           setIsSearchExpanded(false);
                         }}
-                        className="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 transition-all text-left group"
+                        className="w-full flex items-center gap-2.5 p-2 rounded-lg hover:bg-gray-50 transition-all text-left group border border-transparent hover:border-gray-100"
                       >
-                        <div className="w-12 h-12 rounded-full bg-black overflow-hidden flex items-center justify-center text-white font-bold shrink-0">
+                        <div className="w-9 h-9 rounded-full bg-black overflow-hidden flex items-center justify-center text-white font-bold shrink-0 shadow-sm">
                           {result.photoURL ? (
                             <img src={result.photoURL} alt={result.name} className="w-full h-full object-cover" />
                           ) : (
-                            <span>{result.name[0]?.toUpperCase()}</span>
+                            <span className="text-xs">{result.name[0]?.toUpperCase()}</span>
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <div className="font-bold text-sm truncate group-hover:text-black transition-colors">
+                          <div className="font-bold text-[13px] truncate group-hover:text-black transition-colors leading-tight">
                             {result.name}
                           </div>
-                          {result.handle && (
-                            <div className="text-xs text-gray-500 truncate">
-                              {result.type === 'user' ? '#' : result.type === 'group' ? 'g/' : '@'}{result.handle}
-                            </div>
-                          )}
-                          {result.description && (
-                            <div className="text-xs text-gray-400 truncate mt-0.5">
-                              {result.description}
-                            </div>
-                          )}
+                          <div className="text-[10px] text-gray-400 truncate mt-0.5">
+                            {formatHandle(result.handle, result.type as any)}
+                          </div>
                         </div>
                         <div className="shrink-0">
-                          <div className="px-2 py-1 rounded-md bg-gray-100 text-[9px] font-black uppercase tracking-wider text-gray-500">
+                          <div className="px-2 py-0.5 rounded-md bg-gray-50 text-[8px] font-black uppercase tracking-wider text-gray-400 border border-gray-100">
                             {result.type}
                           </div>
                         </div>
@@ -1759,6 +2007,7 @@ export const MindStream = ({
                         }
                       }}
                       onShare={handleShare}
+                      onSpaceClick={handleSpaceClick}
                     />
                   ))
                 ) : (
@@ -1776,7 +2025,7 @@ export const MindStream = ({
             {activeView === 'spaces' && (
               <div className="flex-1 h-full bg-[#f4f4f5] p-2 md:p-4 overflow-hidden flex flex-col">
                 <Window
-                  title={activeSpace ? `Space_Link: ${activeSpace.handle}` : 'Collective_Hub // Explorer'}
+                  title={activeSpace ? `Space_Link: ${activeSpace.handle}` : 'SPACES // Explorer'}
                   color={THEME.green}
                   className="h-full flex flex-col"
                   noPadding
@@ -1820,12 +2069,12 @@ export const MindStream = ({
 
                             <div className="flex-1 pb-2">
                               <div className="flex items-center gap-3 mb-1">
-                                <h2 className="text-3xl font-black tracking-tighter uppercase leading-none text-black bg-white px-4 py-2 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">{activeSpace.name}</h2>
+                                <h2 className="text-xl md:text-2xl font-black tracking-tighter uppercase leading-none text-black bg-white px-3 py-1.5 drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)]">{activeSpace.name}</h2>
                                 {activeSpace.isPrivate && <ShieldCheck size={20} className="text-yellow-400 drop-shadow-md" />}
                               </div>
                               <div className="flex flex-wrap items-center gap-2 mt-2">
                                 <span className="bg-white text-black px-2.5 py-1 text-[10px] font-black border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] uppercase tracking-widest">
-                                  {activeSpace.handle}
+                                  {formatHandle(activeSpace.handle, activeSpace.type)}
                                 </span>
                                 <span className="bg-yellow-400 text-black px-2.5 py-1 text-[10px] font-black border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] uppercase tracking-widest">
                                   {activeSpace.type.toUpperCase()}
@@ -1860,11 +2109,11 @@ export const MindStream = ({
                                 onClick={() => setActiveSpace(null)}
                                 className="px-4 py-2 font-black text-[10px] tracking-widest bg-white border-black hover:bg-gray-50 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
                               >
-                                EXIT_HUB
+                                BACK
                               </Button>
                               <Button
                                 variant={isMemberOfActiveSpace ? "default" : "primary"}
-                                className={`px-4 py-2 font-black text-[10px] tracking-widest shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${isMemberOfActiveSpace ? 'opacity-90' : ''}`}
+                                className={`px-4 py-2 font-black text-[10px] tracking-widest shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] ${isMemberOfActiveSpace ? 'opacity-90' : ''}`}
                                 disabled={userSpaceStatus === 'pending'}
                                 onClick={async () => {
                                   if (!user) { onOpenLogin(); return; }
@@ -1891,8 +2140,8 @@ export const MindStream = ({
                                 {userSpaceStatus === 'pending'
                                   ? 'REQUEST_PENDING...'
                                   : (activeSpace.type === 'group'
-                                    ? (isMemberOfActiveSpace ? 'LEAVE_CLUSTER' : 'JOIN_CLUSTER')
-                                    : (isMemberOfActiveSpace ? 'UNFOLLOW' : 'FOLLOW_PAGE'))}
+                                    ? (isMemberOfActiveSpace ? 'EXIT GROUP' : 'JOIN GROUP')
+                                    : (isMemberOfActiveSpace ? 'UNFOLLOW' : 'FOLLOW'))}
                               </Button>
                             </div>
                           </div>
@@ -1921,6 +2170,7 @@ export const MindStream = ({
                                     onChat={handleChatTrigger}
                                     currentUserId={user?.uid}
                                     onShare={handleShare}
+                                    onSpaceClick={handleSpaceClick}
                                   />
                                 ))
                               ) : (
@@ -1939,26 +2189,54 @@ export const MindStream = ({
                               <p className="text-xs text-black leading-relaxed font-bold font-mono">{activeSpace?.description || 'Secure communication channel for the space. Share, explore and connect.'}</p>
                             </div>
                             <div className="bg-white border-2 border-black p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 mb-4 border-b border-gray-100 pb-2 flex items-center gap-2"><Users size={12} /> Active_Nodes</h3>
+                              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-600 mb-4 border-b border-gray-100 pb-2 flex items-center gap-2 font-black italic"><Plus size={12} strokeWidth={4} /> Pins // Threads</h3>
+                              <div className="space-y-3">
+                                {thoughts.filter(t => t.spaceId === activeSpace?.id && t.tags?.includes('PIN')).length > 0 ? (
+                                  thoughts.filter(t => t.spaceId === activeSpace?.id && t.tags?.includes('PIN')).map(t => (
+                                    <button
+                                      key={t.id}
+                                      onClick={() => setActiveThreadId(t.id)}
+                                      className="block w-full text-left p-3 border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:bg-yellow-50 transition-all bg-white group"
+                                    >
+                                      <div className="text-[10px] font-black uppercase tracking-tight text-black group-hover:underline truncate">{t.title || t.text.slice(0, 30) + '...'}</div>
+                                      <div className="text-[8px] font-bold text-gray-400 mt-1 uppercase tracking-widest flex items-center gap-1"><Activity size={8} /> Active in node</div>
+                                    </button>
+                                  ))
+                                ) : (
+                                  <div className="text-[9px] font-bold text-gray-300 uppercase italic py-2">No pinned threads yet.</div>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="bg-white border-2 border-black p-5 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                              <h3 className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 mb-4 border-b border-gray-100 pb-2 flex items-center gap-2"><Users size={12} /> Members</h3>
                               <div className="space-y-2">
                                 {spaceMembers.length > 0 ? spaceMembers.map(member => (
-                                  <button
+                                  <div
                                     key={member.uid}
-                                    onClick={() => setProfileTargetId(member.uid)}
-                                    className="flex items-center gap-3 w-full hover:bg-yellow-50 p-2 border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] bg-white transition-all group"
+                                    className="flex items-center gap-3 w-full p-2 border border-black shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] bg-white transition-all group"
                                   >
-                                    <div className="w-8 h-8 bg-black overflow-hidden flex items-center justify-center shrink-0 border-2 border-white ring-1 ring-black shadow-sm">
+                                    <button onClick={() => setProfileTargetId(member.uid)} className="w-8 h-8 bg-black overflow-hidden flex items-center justify-center shrink-0 border-2 border-white ring-1 ring-black shadow-sm">
                                       {member.photoURL ? <img src={member.photoURL} className="w-full h-full object-cover" alt="" /> : <User size={14} className="text-white" />}
-                                    </div>
+                                    </button>
                                     <div className="flex-1 text-left min-w-0">
-                                      <div className="text-[10px] font-black truncate uppercase tracking-tight text-black">#{member.name}</div>
+                                      <div className="text-[10px] font-black truncate uppercase tracking-tight text-black">u:{member.name}</div>
                                       <div className="flex items-center gap-1.5 mt-0.5">
                                         <div className="text-[7px] font-black bg-green-100 text-green-700 px-1 border border-green-200 uppercase tracking-widest">Active</div>
                                         {member.role === 'owner' && <div className="text-[7px] font-black bg-yellow-400 text-black px-1 border border-black uppercase tracking-widest">Owner</div>}
                                         {member.role === 'admin' && <div className="text-[7px] font-black bg-black text-white px-1 border border-black uppercase tracking-widest">Admin</div>}
                                       </div>
                                     </div>
-                                  </button>
+                                    {isSpaceAdmin && member.uid !== user?.uid && member.role !== 'owner' && (
+                                      <button
+                                        onClick={() => handleRemoveMember(activeSpace!.id, member.uid)}
+                                        className="p-1 hover:text-red-500 transition-colors"
+                                        title="Remove Member"
+                                      >
+                                        <Trash2 size={12} />
+                                      </button>
+                                    )}
+                                  </div>
                                 )) : (
                                   <div className="text-center py-8 text-gray-400 text-[10px] font-black uppercase tracking-widest border-2 border-dashed border-gray-100 bg-gray-50/50">
                                     Empty_Cluster
@@ -1971,34 +2249,34 @@ export const MindStream = ({
                       </div>
                     ) : (
                       /* --- SPACES DASHBOARD --- */
-                      <div className="flex-1 overflow-y-auto p-4 md:p-8 custom-scrollbar">
+                      <div className="flex-1 overflow-y-auto p-4 md:p-6 custom-scrollbar">
                         <div className="max-w-6xl mx-auto space-y-10">
                           {/* Top Action / Title */}
-                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 pb-8 border-b-2 border-black">
+                          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-6 border-b border-gray-200">
                             <div>
-                              <h2 className="text-4xl font-black tracking-tighter mb-1 uppercase">Collective_Directory</h2>
-                              <p className="text-gray-400 font-bold text-xs uppercase tracking-[0.2em]">Explore and join community clusters</p>
+                              <h2 className="text-xl font-black tracking-tighter mb-0.5 uppercase">SPACES</h2>
+                              <p className="text-gray-400 font-bold text-[10px] uppercase tracking-[0.2em] opacity-60">Explore and join community spaces</p>
                             </div>
                             <Button
                               variant="primary"
-                              className="px-6 py-3 font-black text-xs tracking-[0.2em] transition-transform active:scale-95"
+                              className="px-3 py-1.5 font-black text-[9px] tracking-widest transition-transform active:scale-95 shadow-[1px_1px_0px_0px_rgba(0,0,0,1)]"
                               onClick={() => canPost ? setIsCreateSpaceOpen(true) : onOpenLogin()}
                             >
-                              <Plus size={16} strokeWidth={3} className="mr-2" /> NEW_DATA_SPACE
+                              <Plus size={10} strokeWidth={5} className="mr-1.5" /> CREATE SPACE
                             </Button>
                           </div>
 
                           {/* Filter Tab System */}
-                          <div className="flex border-2 border-black bg-white overflow-hidden shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+                          <div className="flex border border-black bg-white overflow-hidden shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] rounded-lg">
                             {[
                               { id: 'suggested', label: 'Recommended' },
-                              { id: 'mine', label: 'My_Clusters' },
+                              { id: 'mine', label: 'MY SPACES' },
                               { id: 'following', label: 'Subscribed' }
                             ].map((tab) => (
                               <button
                                 key={tab.id}
                                 onClick={() => setDashboardTab(tab.id as any)}
-                                className={`flex-1 py-4 text-[10px] font-black uppercase tracking-[0.2em] transition-all ${dashboardTab === tab.id ? 'bg-black text-white hover:bg-black' : 'bg-white text-gray-400 hover:text-black hover:bg-gray-50 border-r last:border-0 border-black'}`}
+                                className={`flex-1 py-2.5 text-[9px] font-black uppercase tracking-[0.2em] transition-all ${dashboardTab === tab.id ? 'bg-black text-white hover:bg-black' : 'bg-white text-gray-400 hover:text-black hover:bg-gray-50 border-r last:border-0 border-black'}`}
                               >
                                 {tab.label}
                               </button>
@@ -2006,140 +2284,309 @@ export const MindStream = ({
                           </div>
 
                           {dashboardTab === 'suggested' && (
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                              {/* Section: Suggested Groups */}
-                              <div className="space-y-6">
-                                <div className="flex items-center justify-between px-1">
-                                  <label className="text-[10px] font-black uppercase tracking-[0.25em] text-gray-400">Hub_Suggestions [Groups]</label>
+                            <div className="space-y-12 animate-in fade-in slide-in-from-bottom-2 duration-300">
+
+                              {/* NEW: Recently Visited Section */}
+                              {recentSpaceIds.length > 0 && (
+                                <div className="space-y-6">
+                                  <div className="flex items-center justify-between px-1 border-l-2 border-yellow-400 pl-3">
+                                    <label className="text-[10px] font-black uppercase tracking-[0.25em] text-gray-500">Recently_Surfed // History</label>
+                                  </div>
+                                  <div className="flex flex-wrap gap-3">
+                                    {recentSpaceIds.map(id => {
+                                      const space = spaces.find(s => s.id === id);
+                                      if (!space) return null;
+                                      return (
+                                        <div
+                                          key={space.id}
+                                          onClick={() => setActiveSpace(space)}
+                                          className="bg-white border-2 border-black p-2 flex flex-col items-center justify-center text-center w-24 h-24 shrink-0 gap-1.5 hover:bg-yellow-50 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all cursor-pointer group rounded-xl"
+                                        >
+                                          <div className="w-8 h-8 bg-black text-white flex items-center justify-center shrink-0 border border-black shadow-[1px_1px_0px_0px_rgba(255,255,255,0.2)] rounded-lg overflow-hidden">
+                                            {space.avatarURL ? (
+                                              <img src={space.avatarURL} alt={space.name} className="w-full h-full object-cover" />
+                                            ) : (
+                                              space.type === 'group' ? <Users size={14} /> : <Layout size={14} />
+                                            )}
+                                          </div>
+                                          <div className="w-full min-w-0">
+                                            <div className="font-black text-[9px] text-black leading-tight truncate px-0.5 uppercase tracking-tighter">{space.name}</div>
+                                            <div className="text-[6px] text-gray-400 font-bold uppercase tracking-widest truncate">{space.handle}</div>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
-                                <div className="space-y-4">
-                                  {spaces.filter(s => s.type === 'group').slice(0, 4).map(group => (
-                                    <div
-                                      key={group.id}
-                                      onClick={() => setActiveSpace(group)}
-                                      className="bg-white border-2 border-black p-4 flex items-center gap-5 hover:bg-green-50 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all cursor-pointer group"
+                              )}
+
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
+                                {/* Section: Suggested Groups */}
+                                <div className="space-y-6">
+                                  <div className="flex items-center justify-between px-1 border-l-2 border-green-400 pl-3">
+                                    <label className="text-[10px] font-black uppercase tracking-[0.25em] text-gray-500">Hub_Suggestions [Groups]</label>
+                                    <button
+                                      onClick={() => setDashboardTab('directory')}
+                                      className="group/btn flex items-center gap-1.5 text-[9px] font-black text-black hover:text-green-600 transition-colors uppercase tracking-widest pl-2"
                                     >
-                                      <div className="w-14 h-14 bg-black text-white flex items-center justify-center shrink-0 border border-black shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)]">
-                                        <Users size={24} />
-                                      </div>
-                                      <div className="flex-1 min-w-0">
-                                        <div className="font-black text-lg text-gray-900 leading-tight mb-0.5 uppercase tracking-tighter truncate">{group.name}</div>
-                                        <div className="flex items-center gap-2">
-                                          <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">{group.handle}</span>
-                                          <span className="text-gray-200">•</span>
-                                          <span className="text-[9px] text-black font-black uppercase tracking-widest">{group.memberCount || 0} NODES</span>
+                                      VIEW_ALL <ArrowRight size={10} className="group-hover/btn:translate-x-0.5 transition-transform" />
+                                    </button>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2.5">
+                                    {spaces.filter(s => s.type === 'group').slice(0, 6).map(group => (
+                                      <div
+                                        key={group.id}
+                                        onClick={() => setActiveSpace(group)}
+                                        className="bg-white border-2 border-black p-2 flex flex-col items-center justify-center text-center w-24 h-24 shrink-0 gap-1.5 hover:bg-green-50 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all cursor-pointer group rounded-xl"
+                                      >
+                                        <div className="w-8 h-8 bg-black text-white flex items-center justify-center shrink-0 border border-black shadow-[1px_1px_0px_0px_rgba(255,255,255,0.2)] rounded-lg overflow-hidden">
+                                          {group.avatarURL ? (
+                                            <img src={group.avatarURL} alt={group.name} className="w-full h-full object-cover" />
+                                          ) : (
+                                            <Users size={14} />
+                                          )}
+                                        </div>
+                                        <div className="w-full min-w-0">
+                                          <div className="font-black text-[9px] text-black leading-tight truncate px-0.5 uppercase tracking-tighter">{group.name}</div>
+                                          <div className="text-[6px] text-gray-400 font-bold uppercase tracking-widest truncate">{group.handle}</div>
                                         </div>
                                       </div>
-                                      <div className="w-10 h-10 border border-black flex items-center justify-center text-gray-300 group-hover:bg-black group-hover:text-white transition-all">
-                                        <Compass size={16} />
+                                    ))}
+                                  </div>
+                                </div>
+
+                                {/* Section: Suggested Pages */}
+                                <div className="space-y-6">
+                                  <div className="flex items-center justify-between px-1 border-l-2 border-blue-400 pl-3">
+                                    <label className="text-[10px] font-black uppercase tracking-[0.25em] text-gray-500">CreatorHub_Featured [Pages]</label>
+                                    <button
+                                      onClick={() => setDashboardTab('directory')}
+                                      className="group/btn flex items-center gap-1.5 text-[9px] font-black text-black hover:text-blue-600 transition-colors uppercase tracking-widest pl-2"
+                                    >
+                                      VIEW_ALL <ArrowRight size={10} className="group-hover/btn:translate-x-0.5 transition-transform" />
+                                    </button>
+                                  </div>
+                                  <div className="flex flex-wrap gap-2.5">
+                                    {spaces.filter(s => s.type === 'page').slice(0, 6).map(page => (
+                                      <div
+                                        key={page.id}
+                                        onClick={() => setActiveSpace(page)}
+                                        className="bg-white border-2 border-black p-2 flex flex-col items-center justify-center text-center w-24 h-24 shrink-0 gap-1.5 hover:bg-blue-50 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all cursor-pointer group rounded-xl"
+                                      >
+                                        <div className="w-8 h-8 bg-black text-white flex items-center justify-center shrink-0 border border-black shadow-[1px_1px_0px_0px_rgba(255,255,255,0.2)] rounded-lg overflow-hidden">
+                                          {page.avatarURL ? (
+                                            <img src={page.avatarURL} alt={page.name} className="w-full h-full object-cover" />
+                                          ) : (
+                                            <Layout size={14} />
+                                          )}
+                                        </div>
+                                        <div className="w-full min-w-0">
+                                          <div className="font-black text-[9px] text-black leading-tight truncate px-0.5 uppercase tracking-tighter">{page.name}</div>
+                                          <div className="text-[6px] text-gray-400 font-bold uppercase tracking-widest truncate">{page.handle}</div>
+                                        </div>
                                       </div>
-                                    </div>
-                                  ))}
+                                    ))}
+                                  </div>
                                 </div>
                               </div>
 
-                              {/* Section: Suggested Pages */}
-                              <div className="space-y-6">
-                                <div className="flex items-center justify-between px-1">
-                                  <label className="text-[10px] font-black uppercase tracking-[0.25em] text-gray-400">CreatorHub_Featured [Pages]</label>
+                              {/* Section: Sub-feed (Spaces Stream) - ONLY IN SUGGESTED */}
+                              <div className="space-y-6 pt-6">
+                                <div className="flex items-center justify-between border-b border-gray-100 pb-4">
+                                  <div>
+                                    <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Collective Feed</label>
+                                    <p className="text-[11px] font-bold text-gray-500 uppercase">TOP POSTS FROM SPACES YOU ARE IN</p>
+                                  </div>
                                 </div>
-                                <div className="space-y-4">
-                                  {spaces.filter(s => s.type === 'page').slice(0, 4).map(page => (
-                                    <div
-                                      key={page.id}
-                                      onClick={() => setActiveSpace(page)}
-                                      className="bg-white border-2 border-black p-4 flex items-center gap-5 hover:bg-blue-50 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all cursor-pointer group"
-                                    >
-                                      <div className="w-14 h-14 bg-black text-white flex items-center justify-center shrink-0 border border-black shadow-[2px_2px_0px_0px_rgba(255,255,255,0.2)]">
-                                        <Layout size={24} />
-                                      </div>
-                                      <div className="flex-1 min-w-0">
-                                        <div className="font-black text-lg text-gray-900 leading-tight mb-0.5 uppercase tracking-tighter truncate">{page.name}</div>
-                                        <div className="flex items-center gap-2">
-                                          <span className="text-[9px] text-gray-400 uppercase font-bold tracking-widest">{page.handle}</span>
-                                          <span className="text-gray-200">•</span>
-                                          <span className="text-[9px] text-black font-black uppercase tracking-widest">{page.followerCount || 0} FOLLOWERS</span>
-                                        </div>
-                                      </div>
-                                      <div className="w-10 h-10 border border-black flex items-center justify-center text-gray-300 group-hover:bg-black group-hover:text-white transition-all">
-                                        <Layout size={16} />
-                                      </div>
+
+                                <div className="divide-y divide-gray-100 bg-white border border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,0.05)] overflow-hidden rounded-xl">
+                                  {thoughts.filter(t => t.spaceId).length > 0 ? (
+                                    thoughts.filter(t => t.spaceId).slice(0, 10).map(t => (
+                                      <ThreadItem
+                                        key={t.id}
+                                        thread={t}
+                                        onClick={() => setActiveThreadId(t.id)}
+                                        onVote={handleVote}
+                                        onUserClick={(uid) => setProfileTargetId(uid)}
+                                        onChat={handleChatTrigger}
+                                        currentUserId={user?.uid}
+                                        onShare={handleShare}
+                                        onSpaceClick={handleSpaceClick}
+                                      />
+                                    ))
+                                  ) : (
+                                    <div className="p-20 text-center text-gray-400">
+                                      <Activity size={48} className="mx-auto mb-6 opacity-10 animate-pulse" />
+                                      <div className="text-xl font-black text-gray-900 mb-2 uppercase tracking-tighter">Silent_Gardens</div>
+                                      <div className="text-[10px] font-bold text-gray-500 max-w-sm mx-auto leading-relaxed uppercase tracking-widest">Connect to nodes to receive data packets here.</div>
                                     </div>
-                                  ))}
+                                  )}
                                 </div>
                               </div>
                             </div>
                           )}
 
                           {dashboardTab === 'mine' && (
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                              {userSpaces.length > 0 ? (
-                                userSpaces.map(space => (
-                                  <div
-                                    key={space.id}
-                                    onClick={() => setActiveSpace(space)}
-                                    className="bg-white border-2 border-black p-6 hover:bg-yellow-50 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[4px] hover:translate-y-[4px] transition-all cursor-pointer group flex flex-col items-center text-center"
-                                  >
-                                    <div className={`w-16 h-16 border-2 border-black flex items-center justify-center mb-4 group-hover:bg-black group-hover:text-white transition-colors ${space.type === 'group' ? 'bg-purple-50 text-purple-600' : 'bg-blue-50 text-blue-600'}`}>
-                                      {space.type === 'group' ? <Users size={28} /> : <Layout size={28} />}
+                            <div className="space-y-6">
+                              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                                {userSpaces.filter(s => s.ownerId === user?.uid).length > 0 ? (
+                                  userSpaces.filter(s => s.ownerId === user?.uid).map(space => (
+                                    <div
+                                      key={space.id}
+                                      onClick={() => setActiveSpace(space)}
+                                      className="bg-white border border-black p-4 hover:bg-yellow-50 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all cursor-pointer group flex flex-col items-center justify-center text-center aspect-square rounded-2xl"
+                                    >
+                                      <div className="w-10 h-10 border border-black flex items-center justify-center mb-3 group-hover:bg-black group-hover:text-white transition-colors rounded-xl overflow-hidden bg-purple-50">
+                                        {space.avatarURL ? (
+                                          <img src={space.avatarURL} alt={space.name} className="w-full h-full object-cover" />
+                                        ) : (
+                                          space.type === 'group' ? <Users size={18} className="text-purple-600" /> : <Layout size={18} className="text-blue-600" />
+                                        )}
+                                      </div>
+                                      <h3 className="font-black text-[11px] mb-0.5 uppercase tracking-tighter truncate w-full text-black leading-tight px-1">{space.name}</h3>
+                                      <p className="text-[7px] font-black text-gray-400 uppercase tracking-[0.2em]">{formatHandle(space.handle, space.type)}</p>
                                     </div>
-                                    <h3 className="font-black text-lg mb-1 uppercase tracking-tighter truncate w-full text-black">{space.name}</h3>
-                                    <p className="text-[9px] font-black text-gray-500 uppercase tracking-widest mb-6">{space.handle}</p>
-                                    <div className="mt-auto px-4 py-2 bg-black text-white text-[9px] font-black tracking-widest uppercase">
-                                      OPEN_LINK
-                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="col-span-full py-16 bg-gray-50 border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-center rounded-2xl">
+                                    <ShieldCheck size={32} strokeWidth={1.5} className="text-gray-300 mb-3" />
+                                    <p className="text-gray-400 font-black text-[10px] uppercase tracking-widest italic">No locally created instances found.</p>
                                   </div>
-                                ))
-                              ) : (
-                                <div className="col-span-full py-16 bg-gray-50 border-2 border-dashed border-black flex flex-col items-center justify-center text-center">
-                                  <ShieldCheck size={40} strokeWidth={1} className="text-gray-200 mb-4" />
-                                  <p className="text-gray-400 font-black text-xs uppercase tracking-widest italic">No locally created instances found.</p>
-                                </div>
-                              )}
+                                )}
+                              </div>
                             </div>
                           )}
 
                           {dashboardTab === 'following' && (
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                              <div className="col-span-full py-20 bg-white border-2 border-dashed border-black text-center">
-                                <p className="text-gray-400 font-black text-xs uppercase tracking-[0.2em]">No subscriptions active.</p>
-                                <button onClick={() => setDashboardTab('suggested')} className="mt-4 text-black font-black text-[10px] uppercase tracking-widest hover:underline">ACCESS DIRECTORY</button>
+                            <div className="space-y-6">
+                              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                                {userSpaces.filter(s => s.ownerId !== user?.uid).length > 0 ? (
+                                  userSpaces.filter(s => s.ownerId !== user?.uid).map(space => (
+                                    <div
+                                      key={space.id}
+                                      onClick={() => setActiveSpace(space)}
+                                      className="bg-white border border-black p-4 hover:bg-blue-50 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all cursor-pointer group flex flex-col items-center justify-center text-center aspect-square rounded-2xl"
+                                    >
+                                      <div className="w-10 h-10 border border-black flex items-center justify-center mb-3 group-hover:bg-black group-hover:text-white transition-colors rounded-xl overflow-hidden bg-blue-50">
+                                        {space.avatarURL ? (
+                                          <img src={space.avatarURL} alt={space.name} className="w-full h-full object-cover" />
+                                        ) : (
+                                          space.type === 'group' ? <Users size={18} className="text-purple-600" /> : <Layout size={18} className="text-blue-600" />
+                                        )}
+                                      </div>
+                                      <h3 className="font-black text-[11px] mb-0.5 uppercase tracking-tighter truncate w-full text-black leading-tight px-1">{space.name}</h3>
+                                      <p className="text-[7px] font-black text-gray-400 uppercase tracking-[0.2em]">{formatHandle(space.handle, space.type)}</p>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <div className="col-span-full py-16 bg-gray-50 border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-center rounded-2xl">
+                                    <ShieldCheck size={32} strokeWidth={1.5} className="text-gray-300 mb-3" />
+                                    <p className="text-gray-400 font-black text-[10px] uppercase tracking-widest italic">No active subscriptions detected.</p>
+                                    <button onClick={() => setDashboardTab('suggested')} className="mt-4 text-black font-black text-[9px] uppercase tracking-widest hover:underline">ACCESS DIRECTORY</button>
+                                  </div>
+                                )}
                               </div>
                             </div>
                           )}
 
-                          {/* Section: Sub-feed (Spaces Stream) */}
-                          <div className="space-y-6 pt-10 pb-20">
-                            <div className="flex items-center justify-between border-b-2 border-black pb-4">
-                              <div>
-                                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 block mb-1">Signal_Monitor // Collective Feed</label>
-                                <p className="text-[11px] font-bold text-gray-500 uppercase">Live transmissions from your clusters</p>
+                          {dashboardTab === 'directory' && (
+                            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
+                              {/* Directory Header */}
+                              <div className="flex items-center gap-4 border-b border-gray-100 pb-6">
+                                <button
+                                  onClick={() => setDashboardTab('suggested')}
+                                  className="w-8 h-8 flex items-center justify-center border border-black rounded-lg hover:bg-black hover:text-white transition-all shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[1px] hover:translate-x-[1px] hover:translate-y-[1px]"
+                                >
+                                  <ChevronLeft size={16} />
+                                </button>
+                                <div>
+                                  <h3 className="text-lg font-black uppercase tracking-tighter leading-none mb-1">GLOBAL_DIRECTORY</h3>
+                                  <p className="text-[9px] text-gray-400 font-bold uppercase tracking-widest leading-none">Browse all identified clusters on the network</p>
+                                </div>
+                              </div>
+
+                              {/* Search & Main Filters */}
+                              <div className="flex flex-col md:flex-row gap-4 items-start md:items-center justify-between ">
+                                <div className="flex-1 w-full relative">
+                                  <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                                  <input
+                                    type="text"
+                                    placeholder="SEARCH_CLUSTERS..."
+                                    className="w-full pl-9 pr-4 py-2.5 bg-gray-50 border border-black text-[10px] font-black uppercase tracking-widest rounded-xl focus:outline-none focus:bg-white focus:ring-2 focus:ring-black/5 transition-all"
+                                    value={directorySearch}
+                                    onChange={(e) => setDirectorySearch(e.target.value)}
+                                  />
+                                </div>
+                                <div className="flex items-center gap-2 p-1 bg-gray-100 border border-black rounded-xl w-full md:w-auto overflow-x-auto no-scrollbar">
+                                  {(['all', 'group', 'page'] as const).map((f) => (
+                                    <button
+                                      key={f}
+                                      onClick={() => setDirectoryFilter(f)}
+                                      className={`px-4 py-1.5 text-[9px] font-black uppercase tracking-widest rounded-lg transition-all ${directoryFilter === f ? 'bg-black text-white' : 'text-gray-400 hover:text-black hover:bg-white'}`}
+                                    >
+                                      {f}S
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Topic / Tag Cloud */}
+                              <div className="space-y-3">
+                                <label className="text-[8px] font-black uppercase tracking-[0.2em] text-gray-400 border-b border-gray-100 block pb-1 w-fit">FILTER_BY_TOPIC</label>
+                                <div className="flex flex-wrap gap-2">
+                                  {['General', 'Tech', 'Design', 'Media', 'Music', 'Gaming', 'Research', 'AI', 'Web3', 'Culture', 'Philosophy'].map(tag => (
+                                    <button
+                                      key={tag}
+                                      onClick={() => setDirectoryTag(directoryTag === tag ? null : tag)}
+                                      className={`px-3 py-1.5 border border-black rounded-full text-[8px] font-black uppercase tracking-widest transition-all ${directoryTag === tag ? 'bg-black text-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]' : 'bg-white text-gray-400 hover:text-black hover:border-black active:translate-y-[1px]'}`}
+                                    >
+                                      #{tag}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Directory Results */}
+                              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 pb-20">
+                                {spaces
+                                  .filter(s => {
+                                    const matchesSearch = s.name.toLowerCase().includes(directorySearch.toLowerCase()) || s.handle.toLowerCase().includes(directorySearch.toLowerCase());
+                                    const matchesFilter = directoryFilter === 'all' || s.type === directoryFilter;
+                                    return matchesSearch && matchesFilter;
+                                  })
+                                  .map(space => (
+                                    <div
+                                      key={space.id}
+                                      onClick={() => setActiveSpace(space)}
+                                      className="bg-white border border-black p-4 flex flex-col items-center justify-center text-center aspect-square gap-2 hover:bg-gray-50 shadow-[3px_3px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[1px] hover:translate-y-[1px] transition-all cursor-pointer group rounded-2xl"
+                                    >
+                                      <div className={`w-10 h-10 border border-black flex items-center justify-center mb-1 group-hover:bg-black group-hover:text-white transition-colors rounded-xl overflow-hidden ${space.type === 'group' ? 'bg-green-50 text-green-600' : 'bg-blue-50 text-blue-600'}`}>
+                                        {space.avatarURL ? (
+                                          <img src={space.avatarURL} alt={space.name} className="w-full h-full object-cover" />
+                                        ) : (
+                                          space.type === 'group' ? <Users size={20} /> : <Layout size={20} />
+                                        )}
+                                      </div>
+                                      <h3 className="font-black text-[10px] mb-0.5 uppercase tracking-tighter truncate w-full text-black leading-tight px-1">{space.name}</h3>
+                                      <p className="text-[7px] font-black text-gray-400 uppercase tracking-widest">{formatHandle(space.handle, space.type)}</p>
+                                    </div>
+                                  ))
+                                }
+                                {spaces.filter(s => {
+                                  const matchesSearch = s.name.toLowerCase().includes(directorySearch.toLowerCase()) || s.handle.toLowerCase().includes(directorySearch.toLowerCase());
+                                  const matchesFilter = directoryFilter === 'all' || s.type === directoryFilter;
+                                  return matchesSearch && matchesFilter;
+                                }).length === 0 && (
+                                    <div className="col-span-full py-20 text-center">
+                                      <div className="text-gray-300 font-black text-xs uppercase tracking-[0.3em]">No clusters found for this query.</div>
+                                    </div>
+                                  )}
                               </div>
                             </div>
+                          )}
 
-                            <div className="divide-y divide-black bg-white border-2 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,0.1)] overflow-hidden">
-                              {thoughts.filter(t => t.spaceId).length > 0 ? (
-                                thoughts.filter(t => t.spaceId).slice(0, 10).map(t => (
-                                  <ThreadItem
-                                    key={t.id}
-                                    thread={t}
-                                    onClick={() => setActiveThreadId(t.id)}
-                                    onVote={handleVote}
-                                    onUserClick={(uid) => setProfileTargetId(uid)}
-                                    onChat={handleChatTrigger}
-                                    currentUserId={user?.uid}
-                                    onShare={handleShare}
-                                  />
-                                ))
-                              ) : (
-                                <div className="p-20 text-center text-gray-400">
-                                  <Activity size={48} className="mx-auto mb-6 opacity-10 animate-pulse" />
-                                  <div className="text-xl font-black text-gray-900 mb-2 uppercase tracking-tighter">Silent_Gardens</div>
-                                  <div className="text-[10px] font-bold text-gray-500 max-w-sm mx-auto leading-relaxed uppercase tracking-widest">Connect to nodes to receive data packets here.</div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
+
+
                         </div>
                       </div>
                     )}
@@ -2223,7 +2670,7 @@ export const MindStream = ({
 
       {/* Create Modal (For New Threads Only) */}
       <Modal isOpen={isCreateOpen} onClose={() => { if (!isPosting) setIsCreateOpen(false); }} title="Create Post">
-        <div className="space-y-4">
+        <div className="space-y-4 p-6 shrink-0">
           <Input placeholder="Title (Optional)" value={title} onChange={e => setTitle(e.target.value)} disabled={isPosting} />
           <textarea
             className="w-full h-32 bg-[#f4f4f5] border border-black p-2 text-sm focus:outline-none disabled:opacity-50"
@@ -2247,32 +2694,43 @@ export const MindStream = ({
             <Button onClick={() => {
               fileInputRef.current?.click();
             }} className="flex items-center gap-2" disabled={isPosting}>
-              <ImageIcon size={14} /> Add Photo / Video
+              <ImageIcon size={14} /> Add Media
             </Button>
-            {selectedFile && (
-              <div className="flex items-center gap-2 text-xs bg-gray-100 px-2 py-1 rounded">
-                <Paperclip size={12} />
-                <span className="max-w-[150px] truncate">{selectedFile.name}</span>
-                <button onClick={clearFile} disabled={isPosting} className="hover:text-red-500"><X size={12} /></button>
+            {selectedFiles.length > 0 && (
+              <div className="flex flex-wrap gap-2 text-xs">
+                {selectedFiles.map((f, idx) => (
+                  <div key={idx} className="flex items-center gap-1 bg-gray-100 px-2 py-1 rounded">
+                    <Paperclip size={12} />
+                    <span className="max-w-[100px] truncate">{f.name}</span>
+                    <button onClick={() => removeSelectedFile(idx)} disabled={isPosting} className="hover:text-red-500"><X size={12} /></button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
 
           {/* Preview */}
-          {filePreview && (
-            <div className="relative border border-gray-300 rounded overflow-hidden max-h-40 bg-black flex justify-center">
-              {selectedFile?.type.startsWith('video') ? (
-                <video src={filePreview} controls className="h-full" />
-              ) : (
-                <img src={filePreview} alt="Preview" className="h-full object-contain" />
-              )}
+          {filePreviews.length > 0 && (
+            <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar border border-gray-100 p-2 bg-gray-50 rounded-xl">
+              {filePreviews.map((p, idx) => (
+                <div key={idx} className="relative shrink-0 w-32 h-32 rounded-lg overflow-hidden border-2 border-black bg-black">
+                  {p.type.startsWith('video') ? (
+                    <video src={p.url} className="w-full h-full object-cover" muted />
+                  ) : (
+                    <img src={p.url} alt="Preview" className="w-full h-full object-cover" />
+                  )}
+                  <button onClick={() => removeSelectedFile(idx)} className="absolute top-1 right-1 bg-black text-white rounded-full p-1 shadow-md">
+                    <X size={10} />
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 
           <div className="flex justify-end gap-2 items-center">
             {isPosting && <span className="text-xs text-gray-500 animate-pulse flex items-center gap-1"><Loader size={12} className="animate-spin" /> Uploading...</span>}
             <Button onClick={() => { if (!isPosting) setIsCreateOpen(false); }} disabled={isPosting}>CANCEL</Button>
-            <Button onClick={handlePost} variant="primary" disabled={isPosting || (!text && !selectedFile)}>
+            <Button onClick={handlePost} variant="primary" disabled={isPosting || (!text && selectedFiles.length === 0)}>
               {isPosting ? 'POSTING...' : 'POST'}
             </Button>
           </div>
@@ -2282,9 +2740,9 @@ export const MindStream = ({
       {/* Thread Detail Modal */}
       <Modal isOpen={!!activeThread} onClose={() => setActiveThreadId(null)} title={activeThread?.title || 'Thread'}>
         {activeThread && (
-          <div>
+          <div className="p-6 shrink-0">
             {/* Main Thread Content */}
-            <div className={`border border-black p-4 mb-4 bg-yellow-50`}>
+            <div className={`border border-gray-200 p-4 mb-4 bg-yellow-50`}>
               <div className="flex items-center gap-2 mb-2">
                 <div className="w-8 h-8 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold text-xs shrink-0">
                   {activeThread.authorPhoto ? (
@@ -2294,9 +2752,19 @@ export const MindStream = ({
                   )}
                 </div>
                 <div>
-                  <button onClick={() => setProfileTargetId(activeThread.authorId)} className="font-bold text-sm hover:underline">
-                    #{activeThread.authorName}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button onClick={() => setProfileTargetId(activeThread.authorId)} className="font-bold text-sm hover:underline">
+                      {activeThread.spaceId ? 'm:' : 'u:'}{activeThread.authorName}
+                    </button>
+                    {activeThread.spaceHandle && (
+                      <button
+                        onClick={() => handleSpaceClick(activeThread.spaceId!)}
+                        className="text-[11px] font-black text-blue-600 lowercase bg-blue-50 px-2 py-0.5 rounded-full hover:bg-blue-100 border border-blue-100 shadow-sm"
+                      >
+                        {formatHandle(activeThread.spaceHandle, activeThread.tags?.includes('PAGE') ? 'page' : 'group')}
+                      </button>
+                    )}
+                  </div>
                   <div className="text-[10px] text-gray-500">{formatDate(activeThread.createdAt)}</div>
                 </div>
               </div>
@@ -2304,7 +2772,9 @@ export const MindStream = ({
               <p className="text-gray-800 leading-relaxed whitespace-pre-wrap">{activeThread.text}</p>
 
               {/* Full Media View */}
-              {activeThread.mediaUrl && (
+              {(activeThread.mediaItems && activeThread.mediaItems.length > 0) ? (
+                <MediaCarousel items={activeThread.mediaItems} />
+              ) : activeThread.mediaUrl && (
                 <div className="mt-4 mb-2 w-full border border-gray-200 bg-black flex justify-center">
                   {activeThread.mediaType === 'video' ? (
                     <video
@@ -2401,8 +2871,8 @@ export const MindStream = ({
       </Modal >
 
       {/* Create Space Modal */}
-      < Modal isOpen={isCreateSpaceOpen} onClose={() => setIsCreateSpaceOpen(false)} title="Create New Space" >
-        <div className="space-y-4">
+      <Modal isOpen={isCreateSpaceOpen} onClose={() => setIsCreateSpaceOpen(false)} title="Create New Space" >
+        <div className="space-y-4 p-6 shrink-0">
           <div className="flex bg-gray-100 p-1 rounded-xl">
             <button
               onClick={() => setNewSpaceType('group')}
@@ -2439,7 +2909,7 @@ export const MindStream = ({
             <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Handle</label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-black text-xs">
-                {newSpaceType === 'group' ? 'g/' : '@'}
+                {newSpaceType === 'group' ? 'g:' : 'p:'}
               </span>
               <Input
                 className="pl-8"
@@ -2482,7 +2952,7 @@ export const MindStream = ({
         }}
         title="Notifications"
       >
-        <div className="space-y-3 min-h-[300px]">
+        <div className="space-y-3 p-6 min-h-[300px] shrink-0">
           {notifications.length > 0 ? (
             notifications.map(notif => (
               <div
@@ -2495,7 +2965,7 @@ export const MindStream = ({
 
                 <div className="flex-1 min-w-0">
                   <p className="text-xs leading-tight">
-                    <span className="font-black">#{notif.fromName}</span>
+                    <span className="font-black">u:{notif.fromName}</span>
                     {notif.type === 'friend_request' ? ' sent you a friend request.' :
                       notif.type === 'friend_accept' ? ' accepted your friend request!' :
                         notif.type === 'vote_up' ? ' upvoted your thought.' :
@@ -2611,11 +3081,12 @@ export const MindStream = ({
           setProfileTargetId(null);
           setActiveThreadId(id);
         }}
+        onToast={showToast}
       />
 
       {/* Create Reel Modal (Step-by-Step) */}
       <Modal isOpen={isCreateReelOpen} onClose={() => { if (!isPosting) setIsCreateReelOpen(false); }} title={reelStep === 1 ? "Broadcast_Uplink // Step 1" : "Signal_Metadata // Step 2"}>
-        <div className="space-y-6">
+        <div className="space-y-6 p-6 shrink-0">
           {reelStep === 1 ? (
             <div className="flex flex-col items-center justify-center p-12 border-2 border-dashed border-black bg-gray-50 text-center space-y-4">
               <PlaySquare size={48} className="text-gray-400" />
@@ -2637,7 +3108,7 @@ export const MindStream = ({
             <div className="space-y-4">
               {/* Preview */}
               <div className="relative aspect-[9/16] max-h-48 mx-auto bg-black border-2 border-black overflow-hidden shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-                <video src={filePreview || ''} className="w-full h-full object-cover opacity-80" muted autoPlay loop />
+                <video src={filePreviews[0]?.url || ''} className="w-full h-full object-cover opacity-80" muted autoPlay loop />
                 <button onClick={() => setReelStep(1)} className="absolute top-2 right-2 p-1 bg-black text-white border border-white hover:bg-gray-800"><Edit2 size={12} /></button>
               </div>
 
@@ -2708,7 +3179,7 @@ export const MindStream = ({
               </div>
               <div>
                 <div className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Thought Stream</div>
-                <div className="text-xl font-bold">#{shareCardThread.authorName}</div>
+                <div className="text-xl font-bold">u:{shareCardThread.authorName}</div>
               </div>
             </div>
 
@@ -2788,7 +3259,7 @@ export const MindStream = ({
                           onClick={() => { setProfileTargetId(blink.authorId); setOpenedBlinkId(null); }}
                           className="font-black text-sm uppercase tracking-tighter hover:underline"
                         >
-                          #{blink.authorName}
+                          u:{blink.authorName}
                         </button>
                         <p className="text-[10px] text-white/70 font-bold uppercase tracking-widest">{formatDate(blink.createdAt)}</p>
                       </div>
@@ -2841,7 +3312,7 @@ export const MindStream = ({
       {/* Edit Space Modal */}
       <Modal isOpen={isEditSpaceOpen} onClose={() => setIsEditSpaceOpen(false)} title="Edit Space">
         {activeSpace && (
-          <div className="space-y-4">
+          <div className="space-y-4 p-6 shrink-0">
             <div className="space-y-2">
               <label className="text-[10px] font-black uppercase text-gray-400 tracking-widest">Space Name</label>
               <Input
@@ -2948,7 +3419,7 @@ export const MindStream = ({
 
       {/* Member Management Modal */}
       <Modal isOpen={isMemberManageOpen} onClose={() => setIsMemberManageOpen(false)} title="Manage Space Cluster">
-        <div className="space-y-6">
+        <div className="space-y-6 p-6 shrink-0">
           {isSpaceAdmin && (
             <div className="space-y-4 pt-2 border-b-2 border-dashed border-gray-100 pb-6">
               <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 flex items-center gap-2">
@@ -2963,7 +3434,7 @@ export const MindStream = ({
                         {m.photoURL ? <img src={m.photoURL} alt="" /> : m.name?.[0]}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="font-bold text-xs truncate text-gray-900">#{m.name}</div>
+                        <div className="font-bold text-xs truncate text-gray-900">u:{m.name}</div>
                       </div>
                       <div className="flex gap-1">
                         <button
@@ -3009,7 +3480,7 @@ export const MindStream = ({
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
-                      <div className="font-bold text-xs truncate text-gray-900">#{member.name}</div>
+                      <div className="font-bold text-xs truncate text-gray-900">u:{member.name}</div>
                       <span className={`text-[7px] font-black px-1 border border-black uppercase tracking-tight
                         ${member.role === 'owner' ? 'bg-yellow-400 text-black' :
                           member.role === 'admin' ? 'bg-black text-white' : 'bg-gray-100 text-gray-400'}
@@ -3036,7 +3507,7 @@ export const MindStream = ({
                         {isSpaceOwner && member.role !== 'admin' && member.role !== 'owner' && (
                           <button
                             onClick={async () => {
-                              if (window.confirm(`Promote #${member.name} to Admin?`)) {
+                              if (window.confirm(`Promote u:${member.name} to Admin?`)) {
                                 await giveAdminRole(activeSpace!.id, member.uid);
                                 setSpaceMembers(prev => prev.map(m => m.uid === member.uid ? { ...m, role: 'admin' } : m));
                               }
@@ -3052,7 +3523,7 @@ export const MindStream = ({
                         {(isSpaceOwner || (isSpaceAdmin && member.role === 'member')) && (
                           <button
                             onClick={async () => {
-                              if (window.confirm(`Kick #${member.name} from the cluster?`)) {
+                              if (window.confirm(`Kick u:${member.name} from the cluster?`)) {
                                 await removeMember(activeSpace!.id, member.uid);
                                 setSpaceMembers(prev => prev.filter(p => p.uid !== member.uid));
                               }

@@ -26,11 +26,12 @@ const mapToComment = (row: any): Comment => ({
   authorPhoto: row.author_photo,
   mediaUrl: row.media_url,
   mediaType: row.media_type,
+  mediaItems: row.media_items || [],
   likes: row.likes || 0,
   createdAt: { toDate: () => new Date(row.created_at) },
   children: [],
   spaceId: row.space_id,
-  spaceHandle: row.space_handle
+  spaceHandle: row.space_handle || row.spaces?.handle
 });
 
 const mapToSpace = (d: any): Space => ({
@@ -131,23 +132,40 @@ export const registerUser = async (email: string, pass: string, name: string) =>
 export const loginUser = async (identifier: string, pass: string) => {
   console.log('Attempting login for:', identifier);
 
+  let emailToUse = identifier;
+
+  // If identifier doesn't look like an email, assume it's a username and fetch the email
   if (!identifier.includes('@')) {
-    throw new Error("Please log in with your email address. Username login is not supported yet.");
+    console.log('Identifier looks like a username, fetching email...');
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('email')
+      .eq('display_name', identifier)
+      .maybeSingle();
+
+    if (profileError || !profile || !profile.email) {
+      console.warn('Username not found or has no associated email:', identifier);
+      throw new Error("Invalid username or password.");
+    }
+    emailToUse = profile.email;
+    console.log('Found email for username:', emailToUse);
   }
 
   const { data, error } = await supabase.auth.signInWithPassword({
-    email: identifier,
+    email: emailToUse,
     password: pass
   });
 
   if (error) {
     console.error('Supabase Login Error:', error.message);
+    if (error.message.includes('Invalid login credentials')) {
+      throw new Error("Invalid email/username or password.");
+    }
     throw error;
   }
 
   if (data.user && !data.user.email_confirmed_at) {
     console.warn('Login successful but email not confirmed yet.');
-    // Depending on Supabase settings, this might still allow a session or not.
   }
 
   console.log('Login successful for UID:', data.user?.id);
@@ -185,11 +203,24 @@ export const checkUsernameAvailability = async (username: string) => {
 };
 
 export const checkEmailAvailability = async (email: string) => {
-  if (!email) return true;
-  // This is tricky as we can't search auth.users directly easily from client
-  // But we can check if it exists in our 'profiles' table if we store it there (we don't currently)
-  // Or just rely on the error from signUp.
-  return true;
+  if (!email || !email.includes('@')) return true;
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('email')
+      .eq('email', email)
+      .maybeSingle();
+
+    if (error && error.code !== 'PGRST116') {
+      console.error('Check email error:', error);
+      return true;
+    }
+
+    return !data;
+  } catch (err) {
+    console.error('Check email exception:', err);
+    return true;
+  }
 };
 
 export const updateUserProfile = async (photoURL: string, bio: string, fullName: string, bannerURL?: string) => {
@@ -234,10 +265,9 @@ export const getPublicUserProfile = async (targetUserId: string, currentUserId?:
 
 // --- CONTENT FUNCTIONS ---
 
-export const postThought = async (text: string, user: UserProfile, parentId: string | null = null, title?: string, file?: File, spaceId?: string, location?: string, tags?: string[]) => {
+export const postThought = async (text: string, user: UserProfile, parentId: string | null = null, title?: string, files?: File[], spaceId?: string, location?: string, tags?: string[], spaceHandle?: string) => {
   console.log('Starting postThought for user:', user.uid);
 
-  // Refresh user data before posting
   const { data: latestProfile } = await supabase
     .from('profiles')
     .select('display_name, photo_url')
@@ -249,13 +279,26 @@ export const postThought = async (text: string, user: UserProfile, parentId: str
 
   let mediaUrl = '';
   let mediaType: 'image' | 'video' | undefined = undefined;
+  let mediaItems: { url: string; type: 'image' | 'video' }[] = [];
 
   try {
-    if (file) {
-      console.log('Uploading media...', file.name);
-      mediaUrl = await uploadMedia(file);
-      mediaType = file.type.startsWith('video') ? 'video' : 'image';
-      console.log('Media uploaded:', mediaUrl);
+    if (files && files.length > 0) {
+      console.log(`Uploading ${files.length} media files...`);
+      const uploadPromises = files.map(async (file) => {
+        const url = await uploadMedia(file);
+        return {
+          url,
+          type: (file.type.startsWith('video') ? 'video' : 'image') as 'image' | 'video'
+        };
+      });
+
+      mediaItems = await Promise.all(uploadPromises);
+
+      // Keep legacy support for first item
+      if (mediaItems.length > 0) {
+        mediaUrl = mediaItems[0].url;
+        mediaType = mediaItems[0].type;
+      }
     }
 
     const postData = {
@@ -267,7 +310,9 @@ export const postThought = async (text: string, user: UserProfile, parentId: str
       author_photo: authorPhoto,
       media_url: mediaUrl,
       media_type: mediaType,
+      media_items: mediaItems,
       space_id: spaceId,
+      space_handle: spaceHandle,
       location,
       tags
     };
@@ -287,11 +332,22 @@ export const postThought = async (text: string, user: UserProfile, parentId: str
   }
 };
 
-export const subscribeToFeed = (callback: (posts: Comment[]) => void) => {
+export const togglePinPost = async (postId: string, isPinned: boolean) => {
+  const { data: post } = await supabase.from('posts').select('tags').eq('id', postId).single();
+  let tags = post?.tags || [];
+  if (isPinned) {
+    if (!tags.includes('PIN')) tags.push('PIN');
+  } else {
+    tags = tags.filter((t: string) => t !== 'PIN');
+  }
+  await supabase.from('posts').update({ tags }).eq('id', postId);
+};
+
+export const subscribeToFeed = (callback: (posts: Comment[]) => void, userId?: string) => {
   const fetchPostsTree = async () => {
     const { data } = await supabase
       .from('posts')
-      .select('*')
+      .select('*, spaces(handle)')
       .order('created_at', { ascending: false });
 
     if (data) {
@@ -362,7 +418,7 @@ export const subscribeToFeed = (callback: (posts: Comment[]) => void) => {
 
 export const subscribeToStream = subscribeToFeed;
 
-export const votePost = async (postId: string, userId: string, value: number) => {
+export const votePost = async (postId: string, userId: string, value: number, currentLikes?: number, currentVote?: number) => {
   const { error } = await supabase.from('votes').upsert({
     post_id: postId,
     user_id: userId,
@@ -447,13 +503,23 @@ export const fetchSpaces = async (): Promise<Space[]> => {
   return data ? data.map(mapToSpace) : [];
 };
 
-export const joinSpace = async (spaceId: string, userId: string) => {
-  await supabase.from('space_members').upsert({
+export const joinSpace = async (spaceId: string, userId: string, isPrivate: boolean = false) => {
+  const { error } = await supabase.from('space_members').upsert({
     space_id: spaceId,
     user_id: userId,
     role: 'member',
-    status: 'accepted'
+    status: isPrivate ? 'pending' : 'accepted'
   });
+  if (error) throw error;
+
+  if (isPrivate) {
+    // Notify admins/owner
+    const { data: space } = await supabase.from('spaces').select('owner_id, name').eq('id', spaceId).single();
+    if (space) {
+      // For now just notify owner, could be all admins
+      await createNotification(space.owner_id, 'SPACE_REQUEST', userId, { spaceId, spaceName: space.name });
+    }
+  }
 };
 
 export const leaveSpace = async (spaceId: string, userId: string) => {
@@ -468,8 +534,8 @@ export const fetchIsMember = async (spaceId: string, userId: string) => {
     .select('*')
     .eq('space_id', spaceId)
     .eq('user_id', userId)
-    .single();
-  return !!data;
+    .maybeSingle();
+  return data;
 };
 
 export const fetchUserSpaces = async (userId: string): Promise<Space[]> => {
@@ -502,6 +568,15 @@ export const createSpace = async (spaceData: any) => {
     }
     throw error;
   }
+
+  // Add the owner to space_members
+  await supabase.from('space_members').insert({
+    space_id: data.id,
+    user_id: spaceData.owner_id,
+    role: 'owner',
+    status: 'accepted'
+  });
+
   return data;
 };
 
@@ -546,6 +621,27 @@ export const subscribeToNotifications = (userId: string, callback: (notifs: AppN
 
 export const markNotificationRead = async (id: string) => {
   await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+};
+
+export const fetchNotifications = async (userId: string): Promise<AppNotification[]> => {
+  const { data } = await supabase
+    .from('notifications')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false });
+
+  if (!data) return [];
+  return data.map((d: any) => ({
+    id: d.id,
+    userId: d.user_id,
+    type: d.type,
+    fromId: d.from_id,
+    fromName: d.from_name,
+    fromPhoto: d.from_photo,
+    data: d.data,
+    isRead: d.is_read,
+    createdAt: { toDate: () => new Date(d.created_at) }
+  }));
 };
 
 // --- CHAT ---
@@ -595,10 +691,10 @@ export const sendMessage = async (senderId: string, receiverId: string | null, t
 
 // --- ADDITIONAL FUNCTIONS ---
 
-export const fetchUserPosts = async (userId: string): Promise<Comment[]> => {
+export const fetchUserPosts = async (userId: string, currentUserId?: string): Promise<Comment[]> => {
   const { data } = await supabase
     .from('posts')
-    .select('*')
+    .select('*, spaces(handle)')
     .eq('author_id', userId)
     .order('created_at', { ascending: false });
   return data ? data.map(mapToComment) : [];
@@ -613,14 +709,37 @@ export const fetchProfileByUsername = async (username: string): Promise<UserProf
   return data ? mapToUserProfile(data) : null;
 };
 
-export const globalSearch = async (query: string): Promise<any[]> => {
+export interface SearchResult {
+  type: 'user' | 'group' | 'page' | 'space';
+  id: string;
+  name: string;
+  handle: string;
+  photoURL?: string;
+  description?: string;
+}
+
+export const globalSearch = async (query: string): Promise<SearchResult[]> => {
   const { data: users } = await supabase.from('profiles').select('*').ilike('display_name', `%${query}%`);
   const { data: spaces } = await supabase.from('spaces').select('*').ilike('name', `%${query}%`);
 
   return [
-    ...(users || []).map(u => ({ type: 'user', id: u.uid, name: u.full_name, handle: u.display_name, photoURL: u.photo_url })),
-    ...(spaces || []).map(s => ({ type: 'space', id: s.id, name: s.name, handle: s.handle, photoURL: s.avatar_url }))
-  ];
+    ...(users || []).map(u => ({
+      type: 'user' as const,
+      id: u.uid,
+      name: u.full_name || u.display_name,
+      handle: u.display_name,
+      photoURL: u.photo_url,
+      description: u.bio
+    })),
+    ...(spaces || []).map(s => ({
+      type: s.type as any,
+      id: s.id,
+      name: s.name,
+      handle: s.handle,
+      photoURL: s.avatar_url,
+      description: s.description
+    }))
+  ] as SearchResult[];
 };
 
 // --- STUBS ---
@@ -641,49 +760,166 @@ export const updateSpace = async (spaceId: string, updates: Partial<Space>) => {
 
   if (error) throw error;
 };
-export const fetchSpaceMembers = async (sid: string) => { return [] };
-export const respondToSpaceRequest = async (sid: string, uid: string, acc: boolean) => { };
-export const giveAdminRole = async (sid: string, uid: string) => { };
-export const fetchSpaceMembership = async (sid: string, uid: string) => { return null };
-export const fetchPendingMembers = async (sid: string) => { return [] };
-export const removeMember = async (sid: string, uid: string) => { };
+export const fetchSpaceMembers = async (sid: string) => {
+  const { data } = await supabase
+    .from('space_members')
+    .select('role, status, profiles(*)')
+    .eq('space_id', sid);
+
+  return data ? data.map((d: any) => ({
+    uid: d.profiles.uid,
+    name: d.profiles.display_name,
+    photoURL: d.profiles.photo_url,
+    role: d.role,
+    status: d.status
+  })) : [];
+};
+export const respondToSpaceRequest = async (sid: string, uid: string, acc: boolean) => {
+  if (acc) {
+    await supabase.from('space_members').update({ status: 'accepted' }).eq('space_id', sid).eq('user_id', uid);
+  } else {
+    await supabase.from('space_members').delete().eq('space_id', sid).eq('user_id', uid);
+  }
+};
+export const giveAdminRole = async (sid: string, uid: string) => {
+  await supabase.from('space_members').update({ role: 'admin' }).eq('space_id', sid).eq('user_id', uid);
+};
+export const fetchSpaceMembership = async (spaceId: string, userId: string) => {
+  const { data, error } = await supabase
+    .from('space_members')
+    .select('*')
+    .eq('space_id', spaceId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (error) return null;
+  return data;
+};
+
+export const fetchPendingMembers = async (spaceId: string) => {
+  const { data } = await supabase
+    .from('space_members')
+    .select('profiles(*), role, status')
+    .eq('space_id', spaceId)
+    .eq('status', 'pending');
+
+  return data ? data.map((d: any) => ({ ...d.profiles, role: d.role, status: d.status })) : [];
+};
+export const removeMember = async (sid: string, uid: string) => {
+  await supabase.from('space_members')
+    .delete()
+    .eq('space_id', sid)
+    .eq('user_id', uid);
+};
 export const fetchUserLatestPost = async (userId: string) => { return null; };
 export const followPage = async (currentUserId: string, pageId: string) => { };
-export const createNotification = async (targetUserId: string, type: string, fromId: string, data: any = null) => { };
-export const createChatGroup = async (name: string, desc: string, userId: string) => {
+export const createNotification = async (targetUserId: string, type: string, fromId: string, data: any = null) => {
+  const { data: profile } = await supabase.from('profiles').select('display_name, photo_url').eq('uid', fromId).single();
+  await supabase.from('notifications').insert({
+    user_id: targetUserId,
+    type,
+    from_id: fromId,
+    from_name: profile?.display_name || 'User',
+    from_photo: profile?.photo_url,
+    data
+  });
+};
+export const createChatGroup = async (name: string, desc: string, userId: string, avatarUrl?: string) => {
+  console.log('Creating chat group:', { name, desc, userId, avatarUrl });
+
   const { data, error } = await supabase
     .from('chat_groups')
     .insert({
       name,
       description: desc,
       created_by: userId,
-      member_count: 1
+      member_count: 1,
+      avatar_url: avatarUrl
     })
     .select()
     .single();
 
-  if (error) throw error;
+  if (error) {
+    console.error('Error creating chat group:', error);
+    throw error;
+  }
+
+  console.log('Chat group created:', data);
 
   // Add creator as member
+  console.log('Adding creator as member...');
   await joinChatGroup(data.id, userId);
+  console.log('Creator added successfully');
 
   return data.id;
 };
 
-export const updateChatGroup = async (groupId: string, name: string, description: string) => {
+export const updateChatGroup = async (groupId: string, name: string, description: string, avatarUrl?: string) => {
   const { error } = await supabase
     .from('chat_groups')
-    .update({ name, description })
+    .update({ name, description, avatar_url: avatarUrl })
     .eq('id', groupId);
 
   if (error) throw error;
 };
 
+export const fetchChatGroupMembers = async (groupId: string) => {
+  console.log('fetchChatGroupMembers called with groupId:', groupId);
+
+  // First, get member user IDs
+  const { data, error } = await supabase
+    .from('chat_group_members')
+    .select('user_id')
+    .eq('group_id', groupId);
+
+  if (error) {
+    console.error('Error fetching chat group members:', error);
+    throw error;
+  }
+
+  console.log('Raw chat_group_members data:', data);
+
+  if (!data || data.length === 0) {
+    console.log('No members found');
+    return [];
+  }
+
+  // Then fetch profiles separately
+  const userIds = data.map(m => m.user_id);
+  console.log('Fetching profiles for user IDs:', userIds);
+
+  const { data: profiles, error: profileError } = await supabase
+    .from('profiles')
+    .select('*')
+    .in('uid', userIds);
+
+  if (profileError) {
+    console.error('Error fetching profiles:', profileError);
+    throw profileError;
+  }
+
+  console.log('Fetched profiles:', profiles);
+
+  const members = profiles ? profiles.map(p => mapToUserProfile(p)) : [];
+
+  console.log('Mapped members:', members);
+  return members;
+};
+
 export const joinChatGroup = async (groupId: string, userId: string) => {
-  await supabase.from('chat_group_members').upsert({
+  console.log('joinChatGroup called:', { groupId, userId });
+
+  const { data, error } = await supabase.from('chat_group_members').upsert({
     group_id: groupId,
     user_id: userId
-  });
+  }).select();
+
+  if (error) {
+    console.error('Error joining chat group:', error);
+    throw error;
+  }
+
+  console.log('Successfully joined chat group:', data);
 };
 
 export const searchChatGroups = async (query: string): Promise<ChatGroup[]> => {
