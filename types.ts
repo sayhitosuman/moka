@@ -77,6 +77,7 @@ export interface ChatGroupMember {
   id: string;
   groupId: string;
   userId: string;
+  role: 'member' | 'admin' | 'owner';
   joinedAt: any;
 }
 

@@ -3,7 +3,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { MessageSquare, ArrowBigUp, ArrowBigDown, Share2, User, Search, X, Settings, LogOut, Edit2, Trash2, Camera, Users, UserPlus, UserMinus, UserCheck, ChevronLeft, ChevronRight, ArrowRight, Send, ShieldCheck, Activity, MessageCircle, Menu, Filter, Image as ImageIcon, Paperclip, Loader, Copy, Download, Plus, Minimize2, Layout, PlaySquare, Compass, Heart, Bell, Check, Info } from 'lucide-react';
 import { UserProfile, Comment, Space, AppNotification } from '../types';
 import {
-  subscribeToStream, postThought, votePost, updateUserProfile, deletePost, getPublicUserProfile, sendFriendRequest, acceptFriendRequest, declineFriendRequest, unfriend, fetchUserNetwork, fetchSpaces, createSpace, subscribeToNotifications, markNotificationRead, fetchNotifications, globalSearch, SearchResult, fetchIsMember, joinSpace, leaveSpace, fetchUserSpaces, fetchSpaceMembers, updateSpace, respondToSpaceRequest, giveAdminRole, fetchSpaceMembership, fetchPendingMembers, subscribeToFeed, uploadMedia, removeMember, fetchUserPosts, togglePinPost
+  subscribeToStream, postThought, votePost, updateUserProfile, deletePost, getPublicUserProfile, sendFriendRequest, acceptFriendRequest, declineFriendRequest, unfriend, fetchUserNetwork, fetchSpaces, createSpace, subscribeToNotifications, markNotificationRead, markAllNotificationsRead, fetchNotifications, globalSearch, SearchResult, fetchIsMember, joinSpace, leaveSpace, fetchUserSpaces, fetchSpaceMembers, updateSpace, respondToSpaceRequest, giveAdminRole, fetchSpaceMembership, fetchPendingMembers, subscribeToFeed, uploadMedia, removeMember, fetchUserPosts, togglePinPost, addSpaceMember
 } from '../services/store';
 import { Window, Button, Input, Modal, THEME, ToastContainer } from '../components/UI';
 import { toBlob } from 'html-to-image';
@@ -725,14 +725,14 @@ export const UserProfileModal = ({
           <span className="text-xs font-black uppercase tracking-widest text-gray-400">NODE_NOT_FOUND_OR_SYNC_ERROR</span>
         </div>
       ) : (
-        <div className="flex flex-col h-[80vh] bg-white border-t border-black overflow-hidden relative">
+        <div className="flex flex-col bg-white border-t border-black relative">
           {networkType ? (
-            <div className="flex flex-col h-full bg-white">
+            <div className="flex flex-col bg-white">
               <div className="p-4 border-b-2 border-black flex items-center gap-4 bg-[#a6cade]">
                 <button onClick={() => setNetworkType(null)} className="p-1 px-2 border-2 border-black bg-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] active:translate-x-[1px] active:translate-y-[1px] active:shadow-none font-black text-xs">BACK</button>
                 <span className="font-black text-xs uppercase tracking-widest">NETWORK: {networkType}</span>
               </div>
-              <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              <div className="p-4 space-y-3">
                 {networkList.length > 0 ? networkList.map(u => (
                   <div key={u.uid} onClick={() => onNavigate(u.uid)} className="flex items-center gap-4 p-4 border-2 border-black bg-white shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:bg-gray-50 cursor-pointer group">
                     <div className="w-12 h-12 bg-black border-2 border-black overflow-hidden text-white flex items-center justify-center font-black">
@@ -879,8 +879,8 @@ export const UserProfileModal = ({
                 </div>
               )}
 
-              {/* TABS: Neubrutalist Bottom Borders */}
-              <div className="flex bg-white border-b-2 border-black overflow-x-auto no-scrollbar">
+              {/* TABS: Neubrutalist Bottom Borders - Sticky */}
+              <div className="flex bg-white border-b-2 border-black overflow-x-auto no-scrollbar sticky top-0 z-20 shadow-md">
                 {[
                   { id: 'posts', label: 'THREADS', count: threads.length, icon: MessageSquare },
                   { id: 'comments', label: 'COMMENTS', count: comments.length, icon: MessageCircle },
@@ -899,8 +899,8 @@ export const UserProfileModal = ({
                 ))}
               </div>
 
-              {/* TAB CONTENT: Scrollable */}
-              <div className="flex-1 overflow-y-auto p-6 bg-[#f4f4f5]">
+              {/* TAB CONTENT: Natural Height */}
+              <div className="p-6 bg-[#f4f4f5]">
                 {activeTab === 'posts' && (
                   <div className="space-y-4">
                     {threads.length > 0 ? threads.map(p => (
@@ -1159,6 +1159,13 @@ export const MindStream = ({
   const [isUpdatingSpace, setIsUpdatingSpace] = useState(false);
   const [recentSpaceIds, setRecentSpaceIds] = useState<string[]>([]);
 
+  // Add Member State
+  const [friendsForInvite, setFriendsForInvite] = useState<UserProfile[]>([]);
+  const [inviteSearchQuery, setInviteSearchQuery] = useState('');
+  const [isSearchingInvite, setIsSearchingInvite] = useState(false);
+  const [inviteSearchResults, setInviteSearchResults] = useState<SearchResult[]>([]);
+  const [activeManageTab, setActiveManageTab] = useState<'current' | 'pending' | 'add'>('current');
+
   // Update recent spaces
   useEffect(() => {
     if (activeSpace) {
@@ -1239,7 +1246,11 @@ export const MindStream = ({
 
   useEffect(() => {
     if (user?.uid) {
-      const unsub = subscribeToNotifications(user.uid, setNotifications);
+      const unsub = subscribeToNotifications(user.uid, (notifs) => {
+        // Only update if we're not in the middle of an optimistic update
+        // (Actually, subscribeToNotifications will trigger on our changes too, which is fine)
+        setNotifications(notifs);
+      });
       return () => {
         unsub();
       };
@@ -3149,122 +3160,163 @@ export const MindStream = ({
       </Modal >
       <Modal
         isOpen={isNotifOpen}
-        onClose={() => {
+        onClose={async () => {
           setIsNotifOpen(false);
-          // Mark all as read when closing
-          notifications.filter(n => !n.isRead).forEach(n => markNotificationRead(n.id));
+          if (user?.uid) {
+            // Mark all as read in one go
+            await markAllNotificationsRead(user.uid);
+          }
         }}
         title="Notifications"
       >
-        <div className="space-y-3 p-6 min-h-[300px] shrink-0">
-          {notifications.length > 0 ? (
-            notifications.map(notif => (
-              <div
-                key={notif.id}
-                className={`p-4 rounded-2xl border transition-all flex items-center gap-3 ${notif.isRead ? 'bg-gray-50/50 border-gray-100 opacity-80' : 'bg-white border-black/5 shadow-sm'}`}
+        <div className="flex flex-col p-6 min-h-[300px] shrink-0">
+          {notifications.some(n => !n.isRead) && (
+            <div className="flex justify-end mb-4">
+              <button
+                onClick={async () => {
+                  if (user?.uid) {
+                    // Optimistic clear
+                    setNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+                    await markAllNotificationsRead(user.uid);
+                  }
+                }}
+                className="text-[10px] font-black uppercase tracking-widest text-gray-400 hover:text-black transition-colors"
               >
-                <div className="w-10 h-10 rounded-full bg-black overflow-hidden flex items-center justify-center shrink-0">
-                  {notif.fromPhoto ? <img src={notif.fromPhoto} className="w-full h-full object-cover" /> : <User size={20} className="text-white" />}
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs leading-tight">
-                    <span className="font-black">u:{notif.fromName}</span>
-                    {notif.type === 'friend_request' ? ' sent you a friend request.' :
-                      notif.type === 'friend_accept' ? ' accepted your friend request!' :
-                        notif.type === 'vote_up' ? ' upvoted your thought.' :
-                          notif.type === 'vote_down' ? ' downvoted your thought.' :
-                            notif.type === 'message' ? ' sent you a direct signal.' :
-                              notif.type === 'reply' ? ' replied to your thought.' :
-                                notif.type === 'follow' ? ' started following you.' :
-                                  notif.type === 'group_join' ? ` joined your group "${notif.data?.name || 'Cluster'}".` :
-                                    ' interacted with you.'}
-                  </p>
-                  {notif.data?.text && (
-                    <p className="text-[10px] text-gray-400 italic mt-1 line-clamp-1 border-l-2 border-gray-200 pl-2">
-                      "{notif.data.text}"
-                    </p>
-                  )}
-                  <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-widest flex items-center gap-1">
-                    {notif.type === 'vote_up' && <ArrowBigUp size={10} className="text-orange-500" />}
-                    {notif.type === 'vote_down' && <ArrowBigDown size={10} className="text-blue-500" />}
-                    {notif.type === 'message' && <MessageSquare size={10} className="text-yellow-500" />}
-                    {notif.type === 'reply' && <MessageCircle size={10} className="text-green-500" />}
-                    {(notif.type === 'follow' || notif.type === 'friend_request' || notif.type === 'friend_accept') && <Users size={10} className="text-blue-400" />}
-                    {formatDate(notif.createdAt)}
-                  </p>
-                </div>
-
-                {notif.type === 'friend_request' && !notif.isRead && (
-                  <div className="flex gap-1.5 shrink-0">
-                    <button
-                      onClick={async () => {
-                        if (user?.uid) {
-                          await acceptFriendRequest(user.uid, notif.fromId);
-                          markNotificationRead(notif.id);
-                        }
-                      }}
-                      className="p-1 px-3 bg-black text-white rounded-lg text-[10px] font-black hover:bg-gray-800 transition-all"
-                    >
-                      ACCEPT
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (user?.uid) {
-                          await declineFriendRequest(user.uid, notif.fromId);
-                          markNotificationRead(notif.id);
-                        }
-                      }}
-                      className="p-1 px-3 bg-gray-100 text-gray-500 rounded-lg text-[10px] font-black hover:bg-gray-200 transition-all"
-                    >
-                      IGNORE
-                    </button>
-                  </div>
-                )}
-
-                {(notif.type === 'vote_up' || notif.type === 'vote_down' || notif.type === 'reply') && notif.data?.postId && (
-                  <button
-                    onClick={() => { setActiveThreadId(notif.data.postId); setIsNotifOpen(false); }}
-                    className="p-1 px-2 border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all rounded-md"
-                  >
-                    VIEW
-                  </button>
-                )}
-
-                {notif.type === 'group_join' && onToggleChat && (
-                  <button
-                    onClick={() => { onToggleChat(); setIsNotifOpen(false); }}
-                    className="p-1 px-2 border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all rounded-md"
-                  >
-                    VIEW GROUP
-                  </button>
-                )}
-
-                {(notif.type === 'follow' || notif.type === 'friend_accept') && (
-                  <button
-                    onClick={() => { setProfileTargetId(notif.fromId); setIsNotifOpen(false); }}
-                    className="p-1 px-2 border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all rounded-md"
-                  >
-                    PROFILE
-                  </button>
-                )}
-
-                {notif.type === 'message' && !notif.isRead && onToggleChat && (
-                  <button
-                    onClick={() => { onToggleChat(); setIsNotifOpen(false); }}
-                    className="p-1 px-2 bg-yellow-200 border border-black text-[9px] font-black uppercase hover:bg-yellow-300 transition-all rounded-md"
-                  >
-                    CHAT
-                  </button>
-                )}
-              </div>
-            ))
-          ) : (
-            <div className="flex flex-col items-center justify-center py-12 text-gray-300 gap-3">
-              <Bell size={40} strokeWidth={1} />
-              <p className="text-xs font-bold uppercase tracking-widest">No notifications yet</p>
+                Clear All
+              </button>
             </div>
           )}
+          <div className="space-y-3">
+            {notifications.filter(n => !n.isRead).length > 0 ? (
+              notifications.filter(n => !n.isRead).map(notif => (
+                <div
+                  key={notif.id}
+                  className={`p-4 rounded-2xl border transition-all flex items-center gap-3 ${notif.isRead ? 'bg-gray-50/50 border-gray-100 opacity-80' : 'bg-white border-black/5 shadow-sm'}`}
+                >
+                  <button
+                    onClick={() => { setProfileTargetId(notif.fromId); setIsNotifOpen(false); }}
+                    className="w-10 h-10 rounded-full bg-black overflow-hidden flex items-center justify-center shrink-0 hover:ring-2 hover:ring-black transition-all"
+                  >
+                    {notif.fromPhoto ? <img src={notif.fromPhoto} className="w-full h-full object-cover" /> : <User size={20} className="text-white" />}
+                  </button>
+
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs leading-tight">
+                      <button
+                        onClick={() => { setProfileTargetId(notif.fromId); setIsNotifOpen(false); }}
+                        className="font-black hover:underline cursor-pointer"
+                      >
+                        u:{notif.fromName}
+                      </button>
+                      {notif.type === 'friend_request' ? ' sent you a friend request.' :
+                        notif.type === 'friend_accept' ? ' accepted your friend request!' :
+                          notif.type === 'vote_up' ? ' upvoted your thought.' :
+                            notif.type === 'vote_down' ? ' downvoted your thought.' :
+                              notif.type === 'message' ? ' sent you a direct signal.' :
+                                notif.type === 'reply' ? ' replied to your thought.' :
+                                  notif.type === 'follow' ? ' started following you.' :
+                                    notif.type === 'group_join' ? ` joined your group "${notif.data?.name || 'Cluster'}".` :
+                                      ' interacted with you.'}
+                    </p>
+                    {notif.data?.text && (
+                      <p className="text-[10px] text-gray-400 italic mt-1 line-clamp-1 border-l-2 border-gray-200 pl-2">
+                        "{notif.data.text}"
+                      </p>
+                    )}
+                    <p className="text-[10px] text-gray-400 mt-1 uppercase font-bold tracking-widest flex items-center gap-1">
+                      {notif.type === 'vote_up' && <ArrowBigUp size={10} className="text-orange-500" />}
+                      {notif.type === 'vote_down' && <ArrowBigDown size={10} className="text-blue-500" />}
+                      {notif.type === 'message' && <MessageSquare size={10} className="text-yellow-500" />}
+                      {notif.type === 'reply' && <MessageCircle size={10} className="text-green-500" />}
+                      {(notif.type === 'follow' || notif.type === 'friend_request' || notif.type === 'friend_accept') && <Users size={10} className="text-blue-400" />}
+                      {formatDate(notif.createdAt)}
+                    </p>
+                  </div>
+
+                  {notif.type === 'friend_request' && !notif.isRead && (
+                    <div className="flex gap-1.5 shrink-0">
+                      <button
+                        onClick={async () => {
+                          if (user?.uid) {
+                            // Optimistic update
+                            setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, isRead: true } : n));
+                            try {
+                              await acceptFriendRequest(user.uid, notif.fromId);
+                              await markNotificationRead(notif.id);
+                            } catch (e) {
+                              console.error(e);
+                              // Revert on error if needed, but for simplicity we'll stay optimistic
+                            }
+                          }
+                        }}
+                        className="p-1 px-3 bg-black text-white rounded-lg text-[10px] font-black hover:bg-gray-800 transition-all"
+                      >
+                        ACCEPT
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (user?.uid) {
+                            // Optimistic update
+                            setNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, isRead: true } : n));
+                            try {
+                              await declineFriendRequest(user.uid, notif.fromId);
+                              await markNotificationRead(notif.id);
+                            } catch (e) {
+                              console.error(e);
+                            }
+                          }
+                        }}
+                        className="p-1 px-3 bg-gray-100 text-gray-500 rounded-lg text-[10px] font-black hover:bg-gray-200 transition-all"
+                      >
+                        IGNORE
+                      </button>
+                    </div>
+                  )}
+
+                  {(notif.type === 'vote_up' || notif.type === 'vote_down' || notif.type === 'reply') && notif.data?.postId && (
+                    <button
+                      onClick={() => { setActiveThreadId(notif.data.postId); setIsNotifOpen(false); }}
+                      className="p-1 px-2 border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all rounded-md"
+                    >
+                      VIEW
+                    </button>
+                  )}
+
+                  {notif.type === 'group_join' && onToggleChat && (
+                    <button
+                      onClick={() => { onToggleChat(); setIsNotifOpen(false); }}
+                      className="p-1 px-2 border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all rounded-md"
+                    >
+                      VIEW GROUP
+                    </button>
+                  )}
+
+                  {(notif.type === 'follow' || notif.type === 'friend_accept') && (
+                    <button
+                      onClick={() => { setProfileTargetId(notif.fromId); setIsNotifOpen(false); }}
+                      className="p-1 px-2 border border-black text-[9px] font-black uppercase hover:bg-black hover:text-white transition-all rounded-md"
+                    >
+                      PROFILE
+                    </button>
+                  )}
+
+                  {notif.type === 'message' && !notif.isRead && onToggleChat && (
+                    <button
+                      onClick={() => { onToggleChat(); setIsNotifOpen(false); }}
+                      className="p-1 px-2 bg-yellow-200 border border-black text-[9px] font-black uppercase hover:bg-yellow-300 transition-all rounded-md"
+                    >
+                      CHAT
+                    </button>
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="flex flex-col items-center justify-center py-12 text-gray-300 gap-3">
+                <Bell size={40} strokeWidth={1} />
+                <p className="text-xs font-bold uppercase tracking-widest">No notifications yet</p>
+              </div>
+            )}
+          </div>
         </div>
       </Modal>
 
@@ -3623,128 +3675,285 @@ export const MindStream = ({
       </Modal>
 
       {/* Member Management Modal */}
-      <Modal isOpen={isMemberManageOpen} onClose={() => setIsMemberManageOpen(false)} title="Manage Space Cluster">
-        <div className="space-y-6 p-6 shrink-0">
-          {isSpaceAdmin && (
-            <div className="space-y-4 pt-2 border-b-2 border-dashed border-gray-100 pb-6">
-              <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 flex items-center gap-2">
-                <Loader size={12} className={pendingMembers.length > 0 ? 'animate-spin' : ''} />
-                Pending Requests ({pendingMembers.length})
-              </h3>
-              {pendingMembers.length > 0 ? (
-                <div className="space-y-2 max-h-48 overflow-y-auto pr-2">
-                  {pendingMembers.map(m => (
-                    <div key={m.uid} className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-100 rounded-xl">
+      <Modal isOpen={isMemberManageOpen} onClose={() => { setIsMemberManageOpen(false); setActiveManageTab('current'); }} title="Manage Space Cluster">
+        <div className="flex flex-col h-[70vh] bg-white">
+          {/* Tabs */}
+          <div className="flex border-b border-gray-100 bg-gray-50/50 p-1">
+            <button
+              onClick={() => setActiveManageTab('current')}
+              className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest transition-all rounded-lg ${activeManageTab === 'current' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-black'}`}
+            >
+              Current ({spaceMembers.length})
+            </button>
+            <button
+              onClick={() => setActiveManageTab('pending')}
+              className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest transition-all rounded-lg relative ${activeManageTab === 'pending' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-black'}`}
+            >
+              Pending ({pendingMembers.length})
+              {pendingMembers.length > 0 && (
+                <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border-2 border-white" />
+              )}
+            </button>
+            {isSpaceAdmin && (
+              <button
+                onClick={async () => {
+                  setActiveManageTab('add');
+                  if (user) {
+                    const friends = await fetchUserNetwork(user.uid, 'friends');
+                    setFriendsForInvite(friends);
+                  }
+                }}
+                className={`flex-1 py-3 text-[10px] font-black uppercase tracking-widest transition-all rounded-lg ${activeManageTab === 'add' ? 'bg-white text-black shadow-sm' : 'text-gray-400 hover:text-black'}`}
+              >
+                Add / Invite
+              </button>
+            )}
+          </div>
+
+          <div className="flex-1 overflow-y-auto p-6">
+            {activeManageTab === 'pending' && (
+              <div className="animate-fade-in space-y-4">
+                <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 flex items-center gap-2">
+                  <Loader size={12} className={pendingMembers.length > 0 ? 'animate-spin' : ''} />
+                  Pending Requests ({pendingMembers.length})
+                </h3>
+                {pendingMembers.length > 0 ? (
+                  <div className="space-y-2">
+                    {pendingMembers.map(m => (
+                      <div key={m.uid} className="flex items-center gap-3 p-3 bg-gray-50 border border-gray-100 rounded-xl">
+                        <div className="w-8 h-8 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold text-[10px]">
+                          {m.photoURL ? <img src={m.photoURL} alt="" /> : m.name?.[0]}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="font-bold text-xs truncate text-gray-900">u:{m.name}</div>
+                        </div>
+                        <div className="flex gap-1">
+                          <button
+                            onClick={async () => {
+                              await respondToSpaceRequest(activeSpace!.id, m.uid, true);
+                              setPendingMembers(prev => prev.filter(p => p.uid !== m.uid));
+                              fetchSpaceMembers(activeSpace!.id).then(setSpaceMembers);
+                            }}
+                            className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg"
+                          >
+                            <Check size={16} />
+                          </button>
+                          <button
+                            onClick={async () => {
+                              await respondToSpaceRequest(activeSpace!.id, m.uid, false);
+                              setPendingMembers(prev => prev.filter(p => p.uid !== m.uid));
+                            }}
+                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"
+                          >
+                            <X size={16} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-gray-400 italic">No pending requests.</p>
+                )}
+              </div>
+            )}
+
+            {activeManageTab === 'current' && (
+              <div className="animate-fade-in space-y-4">
+                <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 flex items-center gap-2">
+                  <Users size={12} /> Current Nodes ({spaceMembers.length})
+                </h3>
+                <div className="space-y-2">
+                  {[...spaceMembers].sort((a, b) => {
+                    const hierarchy = { 'owner': 0, 'admin': 1, 'member': 2 };
+                    return (hierarchy[a.role as keyof typeof hierarchy] ?? 2) - (hierarchy[b.role as keyof typeof hierarchy] ?? 2);
+                  }).map(member => (
+                    <div key={member.uid} className="flex items-center gap-3 p-3 border border-gray-100 rounded-xl hover:bg-gray-50">
                       <div className="w-8 h-8 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold text-[10px]">
-                        {m.photoURL ? <img src={m.photoURL} alt="" /> : m.name?.[0]}
+                        {member.photoURL ? <img src={member.photoURL} alt="" /> : member.name?.[0]}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="font-bold text-xs truncate text-gray-900">u:{m.name}</div>
+                        <div className="flex items-center gap-2">
+                          <div className="font-bold text-xs truncate text-gray-900">u:{member.name}</div>
+                          <span className={`text-[7px] font-black px-1 border border-black uppercase tracking-tight
+                            ${member.role === 'owner' ? 'bg-yellow-400 text-black' :
+                              member.role === 'admin' ? 'bg-black text-white' : 'bg-gray-100 text-gray-400'}
+                          `}>
+                            {member.role || 'MEMBER'}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex gap-1">
+
+                      <div className="flex items-center gap-1.5">
                         <button
-                          onClick={async () => {
-                            await respondToSpaceRequest(activeSpace!.id, m.uid, true);
-                            setPendingMembers(prev => prev.filter(p => p.uid !== m.uid));
-                          }}
-                          className="p-1.5 text-green-600 hover:bg-green-50 rounded-lg"
+                          onClick={() => setProfileTargetId(member.uid)}
+                          className="p-1.5 text-gray-400 hover:text-black hover:bg-gray-100 rounded-lg transition-all"
+                          title="View Profile"
                         >
-                          <Check size={16} />
+                          <User size={14} />
                         </button>
-                        <button
-                          onClick={async () => {
-                            await respondToSpaceRequest(activeSpace!.id, m.uid, false);
-                            setPendingMembers(prev => prev.filter(p => p.uid !== m.uid));
-                          }}
-                          className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"
-                        >
-                          <X size={16} />
-                        </button>
+
+                        {isSpaceAdmin && member.uid !== user?.uid && (
+                          <>
+                            {isSpaceOwner && member.role !== 'admin' && member.role !== 'owner' && (
+                              <button
+                                onClick={async () => {
+                                  if (window.confirm(`Promote u:${member.name} to Admin?`)) {
+                                    await giveAdminRole(activeSpace!.id, member.uid);
+                                    setSpaceMembers(prev => prev.map(m => m.uid === member.uid ? { ...m, role: 'admin' } : m));
+                                  }
+                                }}
+                                className="p-1.5 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
+                                title="Promote to Admin"
+                              >
+                                <ShieldCheck size={14} />
+                              </button>
+                            )}
+
+                            {(isSpaceOwner || (isSpaceAdmin && member.role === 'member')) && (
+                              <button
+                                onClick={async () => {
+                                  if (window.confirm(`Kick u:${member.name} from the cluster?`)) {
+                                    await removeMember(activeSpace!.id, member.uid);
+                                    setSpaceMembers(prev => prev.filter(p => p.uid !== member.uid));
+                                  }
+                                }}
+                                className="p-1.5 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
+                                title="Kick Node"
+                              >
+                                <UserMinus size={14} />
+                              </button>
+                            )}
+                          </>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
-              ) : (
-                <p className="text-xs text-gray-400 italic">No pending requests.</p>
-              )}
-            </div>
-          )}
+              </div>
+            )}
 
-          <div className="space-y-4">
-            <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 flex items-center gap-2">
-              <Users size={12} /> Current Nodes ({spaceMembers.length})
-            </h3>
-            <div className="space-y-2 max-h-64 overflow-y-auto pr-2">
-              {[...spaceMembers].sort((a, b) => {
-                const hierarchy = { 'owner': 0, 'admin': 1, 'member': 2 };
-                return (hierarchy[a.role as keyof typeof hierarchy] ?? 2) - (hierarchy[b.role as keyof typeof hierarchy] ?? 2);
-              }).map(member => (
-                <div key={member.uid} className="flex items-center gap-3 p-3 border border-gray-100 rounded-xl hover:bg-gray-50">
-                  <div className="w-8 h-8 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold text-[10px]">
-                    {member.photoURL ? <img src={member.photoURL} alt="" /> : member.name?.[0]}
+            {activeManageTab === 'add' && (
+              <div className="animate-fade-in space-y-6">
+                {/* Search Box */}
+                <div className="space-y-4">
+                  <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 flex items-center gap-2">
+                    <Search size={12} /> Search for Users
+                  </h3>
+                  <div className="relative">
+                    <Input
+                      placeholder="Search by username..."
+                      value={inviteSearchQuery}
+                      onChange={async (e) => {
+                        const val = e.target.value;
+                        setInviteSearchQuery(val);
+                        if (val.trim().length > 1) {
+                          setIsSearchingInvite(true);
+                          const results = await globalSearch(val);
+                          setInviteSearchResults(results.filter(r => r.type === 'user'));
+                          setIsSearchingInvite(false);
+                        } else {
+                          setInviteSearchResults([]);
+                        }
+                      }}
+                      className="pl-10"
+                    />
+                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <div className="font-bold text-xs truncate text-gray-900">u:{member.name}</div>
-                      <span className={`text-[7px] font-black px-1 border border-black uppercase tracking-tight
-                        ${member.role === 'owner' ? 'bg-yellow-400 text-black' :
-                          member.role === 'admin' ? 'bg-black text-white' : 'bg-gray-100 text-gray-400'}
-                      `}>
-                        {member.role || 'MEMBER'}
-                      </span>
+
+                  {inviteSearchResults.length > 0 && (
+                    <div className="space-y-2 border-2 border-dashed border-gray-100 p-3 rounded-xl">
+                      {inviteSearchResults.map(res => (
+                        <div key={res.id} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-lg transition-colors">
+                          <div className="w-8 h-8 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold text-[10px]">
+                            {res.photoURL ? <img src={res.photoURL} alt="" /> : res.name[0]}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-bold text-xs truncate">u:{res.handle}</div>
+                          </div>
+                          <button
+                            disabled={spaceMembers.some(sm => sm.uid === res.id)}
+                            onClick={async () => {
+                              console.log('Search Result Add Clicked:', res);
+                              try {
+                                await addSpaceMember(activeSpace!.id, res.id, user!.uid);
+                                showToast(`Added u:${res.handle} to space`, 'success');
+                                // Update local members list
+                                fetchSpaceMembers(activeSpace!.id).then(setSpaceMembers);
+                                // Clear search
+                                setInviteSearchQuery('');
+                                setInviteSearchResults([]);
+                              } catch (err: any) {
+                                console.error('Add Member via search failed:', err);
+                                showToast(err.message || 'Failed to add user.', 'error');
+                              }
+                            }}
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-tight transition-all
+                              ${spaceMembers.some(sm => sm.uid === res.id)
+                                ? 'bg-gray-100 text-gray-400 cursor-default'
+                                : 'bg-black text-white hover:shadow-lg active:scale-95'}
+                            `}
+                          >
+                            {spaceMembers.some(sm => sm.uid === res.id) ? 'ALREADY IN' : 'ADD'}
+                          </button>
+                        </div>
+                      ))}
                     </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5">
-                    {/* View Profile Action */}
-                    <button
-                      onClick={() => setProfileTargetId(member.uid)}
-                      className="p-1.5 text-gray-400 hover:text-black hover:bg-gray-100 rounded-lg transition-all"
-                      title="View Profile"
-                    >
-                      <User size={14} />
-                    </button>
-
-                    {/* Admin Actions (Requires Admin status) */}
-                    {isSpaceAdmin && member.uid !== user?.uid && (
-                      <>
-                        {/* Make Admin Toggle */}
-                        {isSpaceOwner && member.role !== 'admin' && member.role !== 'owner' && (
-                          <button
-                            onClick={async () => {
-                              if (window.confirm(`Promote u:${member.name} to Admin?`)) {
-                                await giveAdminRole(activeSpace!.id, member.uid);
-                                setSpaceMembers(prev => prev.map(m => m.uid === member.uid ? { ...m, role: 'admin' } : m));
-                              }
-                            }}
-                            className="p-1.5 text-blue-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"
-                            title="Promote to Admin"
-                          >
-                            <ShieldCheck size={14} />
-                          </button>
-                        )}
-
-                        {/* Kick Action (Don't let admins kick owners) */}
-                        {(isSpaceOwner || (isSpaceAdmin && member.role === 'member')) && (
-                          <button
-                            onClick={async () => {
-                              if (window.confirm(`Kick u:${member.name} from the cluster?`)) {
-                                await removeMember(activeSpace!.id, member.uid);
-                                setSpaceMembers(prev => prev.filter(p => p.uid !== member.uid));
-                              }
-                            }}
-                            className="p-1.5 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all"
-                            title="Kick Node"
-                          >
-                            <UserMinus size={14} />
-                          </button>
-                        )}
-                      </>
-                    )}
-                  </div>
+                  )}
                 </div>
-              ))}
-            </div>
+
+                {/* Friends List */}
+                <div className="space-y-4">
+                  <h3 className="text-xs font-black uppercase tracking-widest text-gray-400 flex items-center gap-2">
+                    <Users size={12} /> Invite Friends
+                  </h3>
+                  {friendsForInvite.length > 0 ? (
+                    <div className="space-y-2">
+                      {friendsForInvite
+                        .filter(f => !spaceMembers.some(sm => sm.uid === f.uid))
+                        .map(friend => (
+                          <div key={friend.uid} className="flex items-center gap-3 p-3 border border-gray-100 rounded-xl hover:bg-gray-50">
+                            <div className="w-8 h-8 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold text-[10px]">
+                              {friend.photoURL ? <img src={friend.photoURL} alt="" /> : friend.displayName[0]}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-bold text-xs truncate text-gray-900">u:{friend.displayName}</div>
+                            </div>
+                            <button
+                              onClick={async () => {
+                                console.log('Friend Invite Add Clicked:', friend);
+                                try {
+                                  await addSpaceMember(activeSpace!.id, friend.uid, user!.uid);
+                                  showToast(`Added ${friend.displayName}!`, 'success');
+                                  fetchSpaceMembers(activeSpace!.id).then(setSpaceMembers);
+                                } catch (err: any) {
+                                  console.error('Add Friend failed:', err);
+                                  showToast(err.message || 'Failed to add friend.', 'error');
+                                }
+                              }}
+                              className="px-3 py-1.5 bg-black text-white rounded-lg text-[10px] font-black uppercase tracking-tight hover:shadow-lg active:scale-95 transition-all"
+                            >
+                              ADD
+                            </button>
+                          </div>
+                        ))}
+                      {friendsForInvite.filter(f => !spaceMembers.some(sm => sm.uid === f.uid)).length === 0 && (
+                        <p className="text-xs text-gray-400 italic">All your friends are already in this space!</p>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-gray-50 border border-dashed border-gray-200 rounded-xl text-center">
+                      <p className="text-xs text-gray-400 mb-2">Build your network to invite people!</p>
+                      <button
+                        onClick={() => { setIsMemberManageOpen(false); setActiveView('stream'); setSearchQuery(''); }}
+                        className="text-[10px] font-black text-black underline uppercase tracking-widest"
+                      >
+                        Find Peers
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </Modal>

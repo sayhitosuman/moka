@@ -246,7 +246,7 @@ export const updateUserProfile = async (photoURL: string, bio: string, fullName:
 export const getPublicUserProfile = async (targetUserId: string, currentUserId?: string): Promise<UserProfile | null> => {
   console.log('Fetching public profile for:', targetUserId);
   try {
-    const { data, error } = await supabase
+    const { data: profileData, error } = await supabase
       .from('profiles')
       .select('*')
       .eq('uid', targetUserId)
@@ -257,7 +257,33 @@ export const getPublicUserProfile = async (targetUserId: string, currentUserId?:
       return null;
     }
 
-    return data ? mapToUserProfile(data) : null;
+    const profile = mapToUserProfile(profileData);
+
+    if (currentUserId && currentUserId !== targetUserId) {
+      // Fetch friend status
+      const { data: friendship } = await supabase
+        .from('friends')
+        .select('status, user_id')
+        .or(`and(user_id.eq.${currentUserId},friend_id.eq.${targetUserId}),and(user_id.eq.${targetUserId},friend_id.eq.${currentUserId})`);
+
+      if (friendship && friendship.length > 0) {
+        const accepted = friendship.find(f => f.status === 'accepted');
+        if (accepted) {
+          profile.friendStatus = 'friends';
+        } else {
+          const sent = friendship.find(f => f.user_id === currentUserId && f.status === 'pending');
+          if (sent) {
+            profile.friendStatus = 'pending_sent';
+          } else {
+            profile.friendStatus = 'pending_received';
+          }
+        }
+      } else {
+        profile.friendStatus = 'none';
+      }
+    }
+
+    return profile;
   } catch (err) {
     console.error('Exception fetching profile:', err);
     return null;
@@ -441,16 +467,24 @@ export const subscribeToStream = subscribeToFeed;
 
 export const subscribeToChatGroupMessages = (groupId: string, callback: (msgs: ChatMessage[]) => void) => {
   const fetchMsgs = async () => {
-    const { data } = await supabase
+    // Explicit join with profiles using sender_id
+    const { data, error } = await supabase
       .from('messages')
-      .select('*')
+      .select('*, sender:profiles!sender_id(display_name, photo_url)')
       .eq('group_id', groupId)
       .order('created_at', { ascending: true });
+
+    if (error) {
+      console.error('Error fetching group messages:', error);
+      return;
+    }
 
     if (data) {
       callback(data.map((d: any) => ({
         id: d.id,
         senderId: d.sender_id,
+        senderName: d.sender?.display_name || 'Anonymous',
+        senderPhoto: d.sender?.photo_url,
         receiverId: d.receiver_id,
         groupId: d.group_id,
         text: d.text,
@@ -534,6 +568,8 @@ export const sendFriendRequest = async (currentUserId: string, targetUserId: str
     friend_id: targetUserId,
     status: 'pending'
   });
+
+  await createNotification(targetUserId, 'friend_request', currentUserId);
 };
 
 export const acceptFriendRequest = async (currentUserId: string, senderId: string) => {
@@ -546,6 +582,8 @@ export const acceptFriendRequest = async (currentUserId: string, senderId: strin
     friend_id: senderId,
     status: 'accepted'
   });
+
+  await createNotification(senderId, 'friend_accept', currentUserId);
 };
 
 export const declineFriendRequest = async (currentUserId: string, senderId: string) => {
@@ -556,17 +594,36 @@ export const declineFriendRequest = async (currentUserId: string, senderId: stri
 
 export const unfriend = async (currentUserId: string, targetUserId: string) => {
   await supabase.from('friends').delete()
-    .or(`user_id.eq.${currentUserId},friend_id.eq.${targetUserId}`);
+    .or(`and(user_id.eq.${currentUserId},friend_id.eq.${targetUserId}),and(user_id.eq.${targetUserId},friend_id.eq.${currentUserId})`);
 };
 
 export const fetchUserNetwork = async (userId: string, type: string): Promise<UserProfile[]> => {
-  const { data } = await supabase
+  console.log(`fetchUserNetwork: ${type} for ${userId}`);
+
+  // Fetch where I am the sender
+  const { data: sent, error: e1 } = await supabase
     .from('friends')
     .select('profiles!friend_id(*)')
     .eq('user_id', userId)
     .eq('status', 'accepted');
 
-  return data ? data.map((d: any) => mapToUserProfile(d.profiles)) : [];
+  // Fetch where I am the receiver
+  const { data: received, error: e2 } = await supabase
+    .from('friends')
+    .select('profiles!user_id(*)')
+    .eq('friend_id', userId)
+    .eq('status', 'accepted');
+
+  if (e1 || e2) console.error('Error fetching network:', e1 || e2);
+
+  const friends1 = sent ? sent.map((d: any) => mapToUserProfile(d.profiles)) : [];
+  const friends2 = received ? received.map((d: any) => mapToUserProfile(d.profiles)) : [];
+
+  // Combine and deduplicate
+  const combined = [...friends1, ...friends2];
+  const unique = Array.from(new Map(combined.map(u => [u.uid, u])).values());
+
+  return unique;
 };
 
 // --- SPACES ---
@@ -593,6 +650,59 @@ export const joinSpace = async (spaceId: string, userId: string, isPrivate: bool
       // For now just notify owner, could be all admins
       await createNotification(space.owner_id, 'SPACE_REQUEST', userId, { spaceId, spaceName: space.name });
     }
+  }
+};
+
+export const addSpaceMember = async (spaceId: string, userId: string, adminId: string) => {
+  console.log(`addSpaceMember: adding ${userId} to ${spaceId} by ${adminId}`);
+
+  // 1. Check if user is already a member
+  const { data: existing, error: fetchError } = await supabase
+    .from('space_members')
+    .select('id, status, role')
+    .eq('space_id', spaceId)
+    .eq('user_id', userId)
+    .maybeSingle();
+
+  if (fetchError) {
+    console.error('Error checking membership:', fetchError);
+    throw fetchError;
+  }
+
+  if (existing) {
+    if (existing.status === 'accepted') {
+      throw new Error("User is already a member of this space.");
+    }
+    // If pending or blocked, update to accepted
+    console.log('User already exists in table, updating status to accepted...');
+    const { error: updateError } = await supabase
+      .from('space_members')
+      .update({ status: 'accepted', role: 'member' })
+      .eq('id', existing.id);
+
+    if (updateError) {
+      console.error('Error updating membership status:', updateError);
+      throw updateError;
+    }
+  } else {
+    // 2. Insert new member
+    const { error: insertError } = await supabase.from('space_members').insert({
+      space_id: spaceId,
+      user_id: userId,
+      role: 'member',
+      status: 'accepted'
+    });
+
+    if (insertError) {
+      console.error('Error inserting new member:', insertError);
+      throw insertError;
+    }
+  }
+
+  // 3. Notify the user they were added
+  const { data: space } = await supabase.from('spaces').select('name').eq('id', spaceId).single();
+  if (space) {
+    await createNotification(userId, 'group_join', adminId, { spaceId, spaceName: space.name });
   }
 };
 
@@ -695,6 +805,10 @@ export const subscribeToNotifications = (userId: string, callback: (notifs: AppN
 
 export const markNotificationRead = async (id: string) => {
   await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+};
+
+export const markAllNotificationsRead = async (userId: string) => {
+  await supabase.from('notifications').update({ is_read: true }).eq('user_id', userId).eq('is_read', false);
 };
 
 export const fetchNotifications = async (userId: string): Promise<AppNotification[]> => {
@@ -955,9 +1069,9 @@ export const createChatGroup = async (name: string, desc: string, userId: string
 
   console.log('Chat group created:', data);
 
-  // Add creator as member
-  console.log('Adding creator as member...');
-  await joinChatGroup(data.id, userId);
+  // Add creator as owner
+  console.log('Adding creator as owner...');
+  await joinChatGroup(data.id, userId, 'owner');
   console.log('Creator added successfully');
 
   return data.id;
@@ -972,13 +1086,12 @@ export const updateChatGroup = async (groupId: string, name: string, description
   if (error) throw error;
 };
 
-export const fetchChatGroupMembers = async (groupId: string) => {
+export const fetchChatGroupMembers = async (groupId: string): Promise<(UserProfile & { role: string })[]> => {
   console.log('fetchChatGroupMembers called with groupId:', groupId);
 
-  // First, get member user IDs
   const { data, error } = await supabase
     .from('chat_group_members')
-    .select('user_id')
+    .select('user_id, role, profiles:user_id(*)')
     .eq('group_id', groupId);
 
   if (error) {
@@ -986,41 +1099,21 @@ export const fetchChatGroupMembers = async (groupId: string) => {
     throw error;
   }
 
-  console.log('Raw chat_group_members data:', data);
+  if (!data) return [];
 
-  if (!data || data.length === 0) {
-    console.log('No members found');
-    return [];
-  }
-
-  // Then fetch profiles separately
-  const userIds = data.map(m => m.user_id);
-  console.log('Fetching profiles for user IDs:', userIds);
-
-  const { data: profiles, error: profileError } = await supabase
-    .from('profiles')
-    .select('*')
-    .in('uid', userIds);
-
-  if (profileError) {
-    console.error('Error fetching profiles:', profileError);
-    throw profileError;
-  }
-
-  console.log('Fetched profiles:', profiles);
-
-  const members = profiles ? profiles.map(p => mapToUserProfile(p)) : [];
-
-  console.log('Mapped members:', members);
-  return members;
+  return data.map((item: any) => ({
+    ...mapToUserProfile(item.profiles),
+    role: item.role
+  }));
 };
 
-export const joinChatGroup = async (groupId: string, userId: string) => {
-  console.log('joinChatGroup called:', { groupId, userId });
+export const joinChatGroup = async (groupId: string, userId: string, role: string = 'member') => {
+  console.log('joinChatGroup called:', { groupId, userId, role });
 
   const { data, error } = await supabase.from('chat_group_members').upsert({
     group_id: groupId,
-    user_id: userId
+    user_id: userId,
+    role: role
   }).select();
 
   if (error) {
@@ -1029,6 +1122,60 @@ export const joinChatGroup = async (groupId: string, userId: string) => {
   }
 
   console.log('Successfully joined chat group:', data);
+};
+
+export const addChatGroupMember = async (groupId: string, userId: string, adminId: string) => {
+  console.log(`addChatGroupMember: adding ${userId} to group ${groupId} by ${adminId}`);
+
+  const { error } = await supabase.from('chat_group_members').upsert({
+    group_id: groupId,
+    user_id: userId,
+    role: 'member'
+  });
+
+  if (error) {
+    console.error('Error adding chat group member:', error);
+    throw error;
+  }
+
+  // Notify the user
+  const { data: group } = await supabase.from('chat_groups').select('name').eq('id', groupId).single();
+  if (group) {
+    await createNotification(userId, 'group_join', adminId, { groupId, groupName: group.name });
+  }
+};
+
+export const updateChatGroupMemberRole = async (groupId: string, userId: string, role: string) => {
+  const { error } = await supabase
+    .from('chat_group_members')
+    .update({ role })
+    .eq('group_id', groupId)
+    .eq('user_id', userId);
+
+  if (error) throw error;
+};
+
+export const removeChatGroupMember = async (groupId: string, userId: string) => {
+  const { error } = await supabase
+    .from('chat_group_members')
+    .delete()
+    .eq('group_id', groupId)
+    .eq('user_id', userId);
+
+  if (error) throw error;
+};
+
+export const leaveChatGroup = async (groupId: string, userId: string) => {
+  await removeChatGroupMember(groupId, userId);
+};
+
+export const deleteChatGroup = async (groupId: string) => {
+  const { error } = await supabase
+    .from('chat_groups')
+    .delete()
+    .eq('id', groupId);
+
+  if (error) throw error;
 };
 
 export const searchChatGroups = async (query: string): Promise<ChatGroup[]> => {
@@ -1057,16 +1204,20 @@ export const subscribeToChatGroups = (userId: string, callback: (groups: ChatGro
       .eq('user_id', userId);
 
     if (data) {
-      callback(data.map((d: any) => ({
-        id: d.chat_groups.id,
-        name: d.chat_groups.name,
-        description: d.chat_groups.description,
-        createdBy: d.chat_groups.created_by,
-        createdAt: { toDate: () => new Date(d.chat_groups.created_at) },
-        avatarUrl: d.chat_groups.avatar_url,
-        memberCount: d.chat_groups.member_count,
-        isPublic: d.chat_groups.is_public
-      })));
+      // Filter out any entries where the group join failed (e.g. group was deleted)
+      const validGroups = data
+        .filter((d: any) => d.chat_groups !== null)
+        .map((d: any) => ({
+          id: d.chat_groups.id,
+          name: d.chat_groups.name,
+          description: d.chat_groups.description,
+          createdBy: d.chat_groups.created_by,
+          createdAt: { toDate: () => new Date(d.chat_groups.created_at) },
+          avatarUrl: d.chat_groups.avatar_url,
+          memberCount: d.chat_groups.member_count,
+          isPublic: d.chat_groups.is_public
+        }));
+      callback(validGroups);
     }
   };
 

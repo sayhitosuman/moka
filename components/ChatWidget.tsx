@@ -9,7 +9,8 @@ import { UserProfile, ChatMessage, ChatGroup, Comment } from '../types';
 import {
   sendMessage, getPublicUserProfile, markChatAsRead,
   createChatGroup, updateChatGroup, joinChatGroup, searchChatGroups, subscribeToChatGroups,
-  fetchChatGroupMembers, uploadMedia, subscribeToChatGroupMessages
+  fetchChatGroupMembers, uploadMedia, subscribeToChatGroupMessages, fetchUserNetwork, globalSearch, addChatGroupMember, SearchResult, leaveChatGroup, deleteChatGroup,
+  updateChatGroupMemberRole, removeChatGroupMember
 } from '../services/store';
 import { Window, Button, THEME, Input } from './UI';
 
@@ -47,11 +48,17 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
   const [searchResults, setSearchResults] = useState<ChatGroup[]>([]);
   const [showInviteModal, setShowInviteModal] = useState(false);
   const [groupAvatar, setGroupAvatar] = useState<string | null>(null);
-  const [groupMembers, setGroupMembers] = useState<UserProfile[]>([]);
+  const [groupMembers, setGroupMembers] = useState<(UserProfile & { role: string })[]>([]);
   const [showMembers, setShowMembers] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
-  const [clubDetailView, setClubDetailView] = useState<'chat' | 'members' | 'settings'>('chat');
+  const [clubDetailView, setClubDetailView] = useState<'chat' | 'members' | 'settings' | 'invite'>('chat');
   const [groupMessages, setGroupMessages] = useState<ChatMessage[]>([]);
+
+  // Invite State
+  const [friendsForInvite, setFriendsForInvite] = useState<UserProfile[]>([]);
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [userSearchResults, setUserSearchResults] = useState<SearchResult[]>([]);
+  const [isSearchingUsers, setIsSearchingUsers] = useState(false);
 
   // Subscribe to active group messages
   useEffect(() => {
@@ -115,6 +122,9 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
     }
   }, [activeChatUser, messages]);
 
+  const currentUserRole = groupMembers.find(m => m.uid === currentUser.uid)?.role || (activeGroup?.createdBy === currentUser.uid ? 'owner' : 'member');
+  const isClubAdmin = currentUserRole === 'admin' || currentUserRole === 'owner' || activeGroup?.createdBy === currentUser.uid;
+
   const handleSend = async () => {
     if (!inputText.trim()) return;
     const text = inputText;
@@ -129,6 +139,8 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
         receiverId: undefined,
         groupId: activeGroup.id,
         text: text,
+        senderName: currentUser.displayName,
+        senderPhoto: currentUser.photoURL,
         isRead: false,
         createdAt: { toDate: () => new Date() }
       };
@@ -203,12 +215,12 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
     }
   };
 
-  // Load members when activeGroup changes or when switching to members tab
+  // Load members when activeGroup changes
   useEffect(() => {
-    if (activeGroup && clubDetailView === 'members') {
+    if (activeGroup) {
       loadMembers();
     }
-  }, [activeGroup, clubDetailView]);
+  }, [activeGroup?.id]);
 
   const handleSearchGroups = async () => {
     let q = searchQuery.trim();
@@ -339,13 +351,136 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                       >
                         👥 Members
                       </button>
-                      <button
-                        onClick={() => setClubDetailView('settings')}
-                        className={`flex-1 py-3 text-xs font-black uppercase tracking-widest transition-colors border-l border-black ${clubDetailView === 'settings' ? 'bg-black text-white' : 'hover:bg-gray-50'}`}
-                      >
-                        ⚙️ Settings
-                      </button>
+                      {isClubAdmin && (
+                        <>
+                          <button
+                            onClick={() => { setClubDetailView('invite'); fetchUserNetwork(currentUser.uid, 'friends').then(setFriendsForInvite); }}
+                            className={`flex-1 py-3 text-xs font-black uppercase tracking-widest transition-colors border-l border-black ${clubDetailView === 'invite' ? 'bg-black text-white' : 'hover:bg-gray-50'}`}
+                          >
+                            ➕ Add
+                          </button>
+                          <button
+                            onClick={() => setClubDetailView('settings')}
+                            className={`flex-1 py-3 text-xs font-black uppercase tracking-widest transition-colors border-l border-black ${clubDetailView === 'settings' ? 'bg-black text-white' : 'hover:bg-gray-50'}`}
+                          >
+                            ⚙️ Settings
+                          </button>
+                        </>
+                      )}
                     </div>
+
+                    {/* Invite Tab */}
+                    {clubDetailView === 'invite' && (
+                      <div className="p-6 space-y-8 animate-fade-in">
+                        {/* Search Users */}
+                        <div className="space-y-4">
+                          <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-widest flex items-center gap-2">
+                            <Search size={12} /> Search for Users
+                          </h3>
+                          <div className="relative">
+                            <Input
+                              placeholder="Search by username..."
+                              value={userSearchQuery}
+                              onChange={async (e) => {
+                                const val = e.target.value;
+                                setUserSearchQuery(val);
+                                if (val.trim().length > 1) {
+                                  setIsSearchingUsers(true);
+                                  const results = await globalSearch(val);
+                                  setUserSearchResults(results.filter(r => r.type === 'user'));
+                                  setIsSearchingUsers(false);
+                                } else {
+                                  setUserSearchResults([]);
+                                }
+                              }}
+                              className="pl-11 h-12 rounded-xl"
+                            />
+                            <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" />
+                          </div>
+
+                          {userSearchResults.length > 0 && (
+                            <div className="space-y-2 border-2 border-dashed border-gray-100 p-4 rounded-2xl">
+                              {userSearchResults.map(res => (
+                                <div key={res.id} className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-xl transition-colors">
+                                  <div className="w-10 h-10 bg-black rounded-full overflow-hidden text-white flex items-center justify-center font-bold text-xs ring-2 ring-white shadow-sm">
+                                    {res.photoURL ? <img src={res.photoURL} alt="" className="w-full h-full object-cover" /> : res.name[0]}
+                                  </div>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-black text-xs truncate">u:{res.handle}</div>
+                                  </div>
+                                  <button
+                                    disabled={groupMembers.some(gm => gm.uid === res.id)}
+                                    onClick={async () => {
+                                      try {
+                                        await addChatGroupMember(activeGroup.id, res.id, currentUser.uid);
+                                        // Update local list
+                                        loadMembers();
+                                        setUserSearchQuery('');
+                                        setUserSearchResults([]);
+                                        alert(`Added u:${res.handle} to club!`);
+                                      } catch (err: any) {
+                                        alert(err.message || 'Failed to add user.');
+                                      }
+                                    }}
+                                    className={`px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-tight transition-all
+                                      ${groupMembers.some(gm => gm.uid === res.id)
+                                        ? 'bg-gray-100 text-gray-400 cursor-default'
+                                        : 'bg-black text-white hover:shadow-lg active:scale-95 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]'}
+                                    `}
+                                  >
+                                    {groupMembers.some(gm => gm.uid === res.id) ? 'ALREADY IN' : 'ADD'}
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Friends List */}
+                        <div className="space-y-4">
+                          <h3 className="text-[10px] font-black uppercase text-gray-400 tracking-widest flex items-center gap-2">
+                            <Users size={12} /> Invite Friends
+                          </h3>
+                          <div className="space-y-2">
+                            {friendsForInvite.length > 0 ? (
+                              friendsForInvite
+                                .filter(f => !groupMembers.some(gm => gm.uid === f.uid))
+                                .map(friend => (
+                                  <div key={friend.uid} className="flex items-center gap-3 p-4 bg-gray-50 border border-black/5 rounded-2xl hover:bg-gray-100 transition-all group">
+                                    <div className="w-12 h-12 bg-black rounded-full overflow-hidden shadow-md flex items-center justify-center text-white text-sm font-black transition-transform group-hover:scale-105">
+                                      {friend.photoURL ? <img src={friend.photoURL} className="w-full h-full object-cover" /> : friend.displayName[0]}
+                                    </div>
+                                    <div className="flex-1 min-w-0">
+                                      <div className="text-sm font-black truncate uppercase tracking-tight">{friend.displayName}</div>
+                                      <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest">Available to Invite</div>
+                                    </div>
+                                    <button
+                                      onClick={async () => {
+                                        try {
+                                          await addChatGroupMember(activeGroup.id, friend.uid, currentUser.uid);
+                                          loadMembers();
+                                          alert(`Added ${friend.displayName} to club!`);
+                                        } catch (err: any) {
+                                          alert(err.message || 'Failed to add friend.');
+                                        }
+                                      }}
+                                      className="px-5 py-2.5 bg-black text-white rounded-xl text-[10px] font-black uppercase tracking-widest hover:shadow-xl active:scale-95 transition-all shadow-[6px_6px_0px_0px_rgba(0,0,0,0.2)] active:shadow-none active:translate-x-[2px] active:translate-y-[2px]"
+                                    >
+                                      ADD
+                                    </button>
+                                  </div>
+                                ))
+                            ) : (
+                              <p className="text-xs text-gray-400 italic text-center py-4">No available friends to invite.</p>
+                            )}
+
+                            {friendsForInvite.length > 0 && friendsForInvite.filter(f => !groupMembers.some(gm => gm.uid === f.uid)).length === 0 && (
+                              <p className="text-xs text-gray-400 italic text-center py-4">Your entire network is already in this club!</p>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Members Tab */}
                     {clubDetailView === 'members' && (
@@ -377,26 +512,60 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                           ) : (
                             <div className="space-y-2">
                               {groupMembers.map(member => (
-                                <button
+                                <div
                                   key={member.uid}
-                                  onClick={() => {
-                                    if (onOpenProfile) {
-                                      onOpenProfile(member.uid);
-                                    }
-                                  }}
-                                  className="w-full flex items-center gap-4 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors border border-black/5 cursor-pointer text-left"
+                                  className="w-full flex items-center gap-4 p-4 bg-gray-50 rounded-xl border border-black/5 text-left"
                                 >
-                                  <div className="w-12 h-12 bg-black rounded-full overflow-hidden shadow-md flex items-center justify-center text-white text-sm font-black">
+                                  <div className="w-12 h-12 bg-black rounded-full overflow-hidden shadow-md flex items-center justify-center text-white text-sm font-black shrink-0">
                                     {member.photoURL ? <img src={member.photoURL} className="w-full h-full object-cover" /> : member.displayName[0]}
                                   </div>
                                   <div className="flex-1 min-w-0">
                                     <div className="text-sm font-black truncate uppercase tracking-tight">{member.displayName}</div>
-                                    <div className="text-xs text-gray-500 font-bold">{member.bio || 'Stream member'}</div>
+                                    <div className="text-[10px] text-gray-500 font-bold flex items-center gap-2">
+                                      <span className={`px-2 py-0.5 rounded text-[9px] text-white uppercase font-black ${member.role === 'owner' ? 'bg-purple-500' : member.role === 'admin' ? 'bg-blue-500' : 'bg-gray-400'}`}>
+                                        {member.role === 'owner' ? 'Founder' : member.role === 'admin' ? 'Admin' : 'Member'}
+                                      </span>
+                                    </div>
                                   </div>
-                                  <div className="px-3 py-1 bg-black text-white text-[9px] font-black uppercase rounded-lg">
-                                    {member.uid === activeGroup.createdBy ? 'Founder' : 'Member'}
-                                  </div>
-                                </button>
+
+                                  {isClubAdmin && member.uid !== currentUser.uid && member.role !== 'owner' && (
+                                    <div className="flex gap-2">
+                                      {currentUserRole === 'owner' && (
+                                        <button
+                                          onClick={async () => {
+                                            const newRole = member.role === 'admin' ? 'member' : 'admin';
+                                            try {
+                                              await updateChatGroupMemberRole(activeGroup.id, member.uid, newRole);
+                                              loadMembers();
+                                            } catch (err) {
+                                              console.error(err);
+                                            }
+                                          }}
+                                          title={member.role === 'admin' ? 'Remove Admin' : 'Make Admin'}
+                                          className="p-2 hover:bg-black hover:text-white rounded-lg transition-colors border border-black/10"
+                                        >
+                                          {member.role === 'admin' ? <ShieldCheck size={14} className="text-blue-500" /> : <ShieldCheck size={14} />}
+                                        </button>
+                                      )}
+                                      <button
+                                        onClick={async () => {
+                                          if (confirm(`Remove ${member.displayName} from this club?`)) {
+                                            try {
+                                              await removeChatGroupMember(activeGroup.id, member.uid);
+                                              loadMembers();
+                                            } catch (err) {
+                                              console.error(err);
+                                            }
+                                          }
+                                        }}
+                                        title="Kick Member"
+                                        className="p-2 hover:bg-red-500 hover:text-white rounded-lg transition-colors border border-black/10"
+                                      >
+                                        <X size={14} />
+                                      </button>
+                                    </div>
+                                  )}
+                                </div>
                               ))}
                             </div>
                           )}
@@ -495,15 +664,46 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                             <button
                               onClick={async () => {
                                 if (confirm('Are you sure you want to leave this club?')) {
-                                  // Add leave club logic here
-                                  setActiveGroup(null);
-                                  setClubDetailView('chat');
+                                  try {
+                                    await leaveChatGroup(activeGroup.id, currentUser.uid);
+                                    // Optimistic UI update
+                                    setMyGroups(prev => prev.filter(g => g.id !== activeGroup.id));
+                                    setActiveGroup(null);
+                                    setClubDetailView('chat');
+                                    alert('You have left the club.');
+                                  } catch (err) {
+                                    console.error(err);
+                                    alert('Failed to leave club');
+                                  }
                                 }
                               }}
-                              className="w-full py-3 bg-red-500 text-white font-black text-sm uppercase tracking-widest rounded-xl hover:bg-red-600 transition-colors"
+                              className="w-full py-3 bg-gray-100 text-black font-black text-sm uppercase tracking-widest rounded-xl hover:bg-gray-200 transition-colors border-2 border-black/5"
                             >
                               Leave Club
                             </button>
+
+                            {activeGroup.createdBy === currentUser.uid && (
+                              <button
+                                onClick={async () => {
+                                  if (confirm('CRITICAL: Are you sure you want to DELETE this club? This action cannot be undone.')) {
+                                    try {
+                                      await deleteChatGroup(activeGroup.id);
+                                      // Optimistic UI update
+                                      setMyGroups(prev => prev.filter(g => g.id !== activeGroup.id));
+                                      setActiveGroup(null);
+                                      setClubDetailView('chat');
+                                      alert('Club has been deleted.');
+                                    } catch (err) {
+                                      console.error(err);
+                                      alert('Failed to delete club');
+                                    }
+                                  }
+                                }}
+                                className="w-full py-3 bg-red-500 text-white font-black text-sm uppercase tracking-widest rounded-xl hover:bg-red-600 transition-colors shadow-[4px_4px_0px_0px_rgba(0,0,0,0.2)]"
+                              >
+                                DELETE CLUB
+                              </button>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -522,7 +722,10 @@ export const ChatWidget = ({ currentUser, isOpen, onClose, targetUser, messages,
                     {activeMessages.map((m, idx) => {
                       const isMe = m.senderId === currentUser.uid;
                       const prevMsg = idx > 0 ? activeMessages[idx - 1] : null;
-                      const showHeader = !isMe && (!prevMsg || prevMsg.senderId !== m.senderId);
+                      // In group chats, always show header for members at start of block
+                      const showHeader = activeGroup
+                        ? (!prevMsg || prevMsg.senderId !== m.senderId)
+                        : (!isMe && (!prevMsg || prevMsg.senderId !== m.senderId));
 
                       return (
                         <div key={m.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} ${showHeader ? 'mt-6' : 'mt-1'}`}>
