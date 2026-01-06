@@ -814,7 +814,7 @@ export const UserProfileModal = ({
                     <div className="mb-4">
                       <h2 className="text-3xl font-black uppercase tracking-tighter text-black bg-white px-4 py-0 mb-4 inline-block border-2 border-black shadow-[3px_3px_0px_0px_rgba(0,0,0,1)]">{profile.fullName || profile.displayName}</h2>
                       <div className="flex flex-wrap justify-center md:justify-start gap-2">
-                        <span className="px-2 py-0.5 border-2 border-black bg-white text-[9px] font-black tracking-widest uppercase">NODE: #{profile.displayName}</span>
+                        <span className="px-2 py-0.5 border-2 border-black bg-white text-[9px] font-black tracking-widest uppercase">NODE: u:{profile.displayName}</span>
                         {isOwnProfile && <span className="px-2 py-0.5 border-2 border-black bg-black text-white text-[9px] font-black tracking-widest uppercase italic">ROOT_USER</span>}
                       </div>
                     </div>
@@ -1039,7 +1039,7 @@ export const UserProfileModal = ({
                         <div className="p-4 border-2 border-black bg-[#f4f4f5]">
                           <label className="text-[10px] font-black uppercase block opacity-40 mb-1">GARDEN_ID</label>
                           <div className="flex items-center justify-between font-mono font-black text-sm">
-                            <span>#{profile.displayName}</span>
+                            <span>u:{profile.displayName}</span>
                             <span className="text-[10px] border border-black px-2 bg-white">LOCKED</span>
                           </div>
                         </div>
