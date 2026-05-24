@@ -8,9 +8,10 @@ const api = new Hono();
 const secured = new Hono();
 
 const ensureUser = async (userId: string) => {
-  const { db } = await import('../src/db/index.js');
+  const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
   const { users } = await import('../src/db/schema.js');
 
+  await ensureDatabaseSchema();
   await db.insert(users).values({
     id: userId,
     displayName: 'User',
@@ -52,6 +53,12 @@ const errorMessage = (err: unknown) => {
   return String(err);
 };
 
+const fullErrorMessage = (err: unknown) => {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as Error & { cause?: unknown }).cause;
+  return cause ? `${err.message}\nCause: ${errorMessage(cause)}` : err.message;
+};
+
 // Middleware to parse JSON
 api.use('*', async (c, next) => {
   // CORS configuration
@@ -81,15 +88,16 @@ api.get('/diagnostics/env', (c) => c.json({
 
 api.get('/diagnostics/db', async (c) => {
   try {
-    const { db } = await import('../src/db/index.js');
+    const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
 
+    await ensureDatabaseSchema();
     await db.query.users.findMany({ limit: 1 });
     await db.query.posts.findMany({ limit: 1 });
 
     return c.json({ status: 'ok', message: 'Database query succeeded' });
   } catch (err) {
     console.error('Database diagnostics failed:', err);
-    return c.json({ status: 'error', message: errorMessage(err) }, 500);
+    return c.json({ status: 'error', message: fullErrorMessage(err) }, 500);
   }
 });
 
@@ -100,9 +108,10 @@ api.post('/webhooks/clerk', async (c) => {
   if (body.type === 'user.created') {
     const data = body.data;
     try {
-      const { db } = await import('../src/db/index.js');
+      const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
       const { users } = await import('../src/db/schema.js');
 
+      await ensureDatabaseSchema();
       await db.insert(users).values({
         id: data.id,
         displayName: data.username || data.first_name || 'Anonymous',
@@ -138,9 +147,10 @@ secured.get('/users/me', async (c) => {
   }
 
   try {
-    const { db } = await import('../src/db/index.js');
+    const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
     const { users } = await import('../src/db/schema.js');
 
+    await ensureDatabaseSchema();
     const user = await db.query.users.findFirst({
       where: eq(users.id, auth.userId),
     });
@@ -191,9 +201,10 @@ secured.post('/storage/signature', async (c) => {
 // --- POSTS ---
 secured.get('/posts', async (c) => {
   try {
-    const { db } = await import('../src/db/index.js');
+    const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
     const { posts } = await import('../src/db/schema.js');
 
+    await ensureDatabaseSchema();
     const allPosts = await db.query.posts.findMany({
       orderBy: [desc(posts.createdAt)],
       limit: 50,
@@ -236,10 +247,11 @@ secured.post('/posts', async (c) => {
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
-    const { db } = await import('../src/db/index.js');
+    const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
     const { posts } = await import('../src/db/schema.js');
     const body = await c.req.json();
     const newPostId = newId();
+    await ensureDatabaseSchema();
     await ensureUser(auth.userId);
     await db.insert(posts).values({
       id: newPostId,
@@ -266,10 +278,11 @@ secured.post('/posts/:id/vote', async (c) => {
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
-    const { db } = await import('../src/db/index.js');
+    const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
     const { posts, postVotes } = await import('../src/db/schema.js');
     const postId = c.req.param('id');
     const body = await c.req.json(); // { value: 1 or -1 }
+    await ensureDatabaseSchema();
     
     // Check existing vote
     const existing = await db.query.postVotes.findFirst({
@@ -311,8 +324,9 @@ secured.post('/posts/:id/vote', async (c) => {
 // --- SPACES ---
 secured.get('/spaces', async (c) => {
   try {
-    const { db } = await import('../src/db/index.js');
+    const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
 
+    await ensureDatabaseSchema();
     const allSpaces = await db.query.spaces.findMany();
     return c.json(allSpaces);
   } catch (err) {
@@ -326,10 +340,11 @@ secured.post('/spaces', async (c) => {
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
-    const { db } = await import('../src/db/index.js');
+    const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
     const { spaces, spaceMembers } = await import('../src/db/schema.js');
     const body = await c.req.json();
     const newSpaceId = newId();
+    await ensureDatabaseSchema();
     await ensureUser(auth.userId);
     
     await db.insert(spaces).values({
@@ -363,10 +378,11 @@ secured.post('/spaces/:id/join', async (c) => {
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
-    const { db } = await import('../src/db/index.js');
+    const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
     const { spaceMembers } = await import('../src/db/schema.js');
     const spaceId = c.req.param('id');
     const body = await c.req.json(); // { isPrivate: boolean }
+    await ensureDatabaseSchema();
     await ensureUser(auth.userId);
     
     await db.insert(spaceMembers).values({
