@@ -87,17 +87,47 @@ api.get('/diagnostics/env', (c) => c.json({
 }));
 
 api.get('/diagnostics/db', async (c) => {
-  try {
-    const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
+  const steps: Record<string, unknown> = {};
 
+  try {
+    const { createClient } = await import('@libsql/client');
+    const url = process.env.TURSO_DATABASE_URL || 'file:local.db';
+    const client = createClient({
+      url,
+      authToken: process.env.TURSO_AUTH_TOKEN,
+    });
+
+    steps.connection = { urlHost: url.replace(/\/\/.*@/, '//***@').split('?')[0] };
+    await client.execute('SELECT 1');
+    steps.ping = 'ok';
+
+    const tables = await client.execute(
+      `SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`,
+    );
+    steps.tables = tables.rows.map((row) => row.name);
+
+    const userInfo = await client.execute('PRAGMA table_info(users)');
+    steps.usersColumns = userInfo.rows.map((row) => row.name);
+
+    const { db, ensureDatabaseSchema } = await import('../src/db/index.js');
     await ensureDatabaseSchema();
+    steps.schemaBootstrap = 'ok';
+
     await db.query.users.findMany({ limit: 1 });
     await db.query.posts.findMany({ limit: 1 });
+    steps.drizzleQueries = 'ok';
 
-    return c.json({ status: 'ok', message: 'Database query succeeded' });
+    return c.json({ status: 'ok', message: 'Database query succeeded', steps });
   } catch (err) {
     console.error('Database diagnostics failed:', err);
-    return c.json({ status: 'error', message: fullErrorMessage(err) }, 500);
+    return c.json({
+      status: 'error',
+      message: fullErrorMessage(err),
+      steps,
+      hint: steps.usersColumns
+        ? 'users table exists but Drizzle query failed — check column types or redeploy.'
+        : 'Run `npm run db:push` from the backend folder against your Turso database (see DEPLOYMENT.md).',
+    }, 500);
   }
 });
 
