@@ -1,0 +1,330 @@
+import { Hono } from 'hono';
+import { handle } from 'hono/vercel';
+import { clerkMiddleware, getAuth } from '@hono/clerk-auth';
+import { db } from '../src/db';
+import { users, posts, postVotes, spaces, spaceMembers } from '../src/db/schema';
+import { eq, desc } from 'drizzle-orm';
+import { v4 as uuidv4 } from 'uuid';
+
+export const config = {
+  runtime: 'edge',
+};
+
+const app = new Hono().basePath('/api');
+
+const ensureUser = async (userId: string) => {
+  await db.insert(users).values({
+    id: userId,
+    displayName: 'User',
+  }).onConflictDoNothing();
+};
+
+const toMillis = (value: unknown) => {
+  if (!value) return Date.now();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value < 10_000_000_000 ? value * 1000 : value;
+  if (typeof value === 'string') {
+    const numeric = Number(value);
+    if (!Number.isNaN(numeric)) return numeric < 10_000_000_000 ? numeric * 1000 : numeric;
+    const parsed = Date.parse(value);
+    if (!Number.isNaN(parsed)) return parsed;
+  }
+  return Date.now();
+};
+
+const toStringArray = (value: unknown) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string');
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+};
+
+// Middleware to parse JSON
+app.use('*', async (c, next) => {
+  // CORS configuration
+  c.header('Access-Control-Allow-Origin', '*'); // Update in production to your domain
+  c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  c.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  
+  if (c.req.method === 'OPTIONS') {
+    return c.body(null, 204);
+  }
+  
+  await next();
+});
+
+// Clerk Auth Middleware
+app.use('*', clerkMiddleware());
+
+// Health Check
+app.get('/health', (c) => c.json({ status: 'ok', message: 'Hono Backend is running!' }));
+
+// --- Users ---
+app.get('/users/me', async (c) => {
+  const auth = getAuth(c);
+  if (!auth?.userId) {
+    return c.json({ error: 'Unauthorized' }, 401);
+  }
+
+  try {
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, auth.userId),
+    });
+
+    if (!user) {
+      return c.json({ error: 'User not found' }, 404);
+    }
+    return c.json(user);
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: 'Internal Server Error' }, 500);
+  }
+});
+
+// Webhook from Clerk to create user in Turso
+app.post('/webhooks/clerk', async (c) => {
+  // Add signature verification here in production
+  const body = await c.req.json();
+  
+  if (body.type === 'user.created') {
+    const data = body.data;
+    try {
+      await db.insert(users).values({
+        id: data.id,
+        displayName: data.username || data.first_name || 'Anonymous',
+        fullName: `${data.first_name || ''} ${data.last_name || ''}`.trim(),
+        photoUrl: data.image_url,
+      });
+      return c.json({ success: true });
+    } catch (e) {
+      console.error(e);
+      return c.json({ error: 'Failed to insert user' }, 500);
+    }
+  }
+
+  return c.json({ success: true });
+});
+
+import { v2 as cloudinary } from 'cloudinary';
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
+// --- Storage (Cloudinary) ---
+app.post('/storage/signature', async (c) => {
+  const auth = getAuth(c);
+  if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
+
+  const timestamp = Math.round((new Date()).getTime() / 1000);
+  
+  try {
+    const signature = cloudinary.utils.api_sign_request({
+      timestamp: timestamp,
+      folder: 'streamweb', // Puts all uploads in a folder
+    }, process.env.CLOUDINARY_API_SECRET!);
+
+    return c.json({ 
+      timestamp, 
+      signature, 
+      cloudName: process.env.CLOUDINARY_CLOUD_NAME,
+      apiKey: process.env.CLOUDINARY_API_KEY 
+    });
+  } catch (err) {
+    console.error('Error generating signature:', err);
+    return c.json({ error: 'Failed to generate signature' }, 500);
+  }
+});
+
+// --- POSTS ---
+app.get('/posts', async (c) => {
+  try {
+    const allPosts = await db.query.posts.findMany({
+      orderBy: [desc(posts.createdAt)],
+      limit: 50,
+      with: {
+        author: true
+      }
+    });
+    
+    // Map to frontend Comment structure
+    const mapped = allPosts.map(p => ({
+      id: p.id,
+      postId: p.parentId || 'stream',
+      parentId: p.parentId,
+      text: p.text,
+      authorId: p.authorId,
+      authorName: (p as any).author?.displayName || 'Unknown',
+      authorPhoto: (p as any).author?.photoUrl,
+      createdAt: toMillis(p.createdAt),
+      children: [],
+      likes: p.likes || 0,
+      mediaUrl: p.mediaUrl,
+      mediaType: p.mediaType,
+      mediaItems: p.mediaItems || undefined,
+      title: p.title,
+      spaceId: p.spaceId,
+      spaceHandle: p.spaceHandle,
+      location: p.location,
+      tags: toStringArray(p.tags),
+    }));
+
+    return c.json(mapped);
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: 'Failed to fetch posts' }, 500);
+  }
+});
+
+app.post('/posts', async (c) => {
+  const auth = getAuth(c);
+  if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
+
+  try {
+    const body = await c.req.json();
+    const newPostId = uuidv4();
+    await ensureUser(auth.userId);
+    await db.insert(posts).values({
+      id: newPostId,
+      text: body.text,
+      authorId: auth.userId,
+      title: body.title,
+      mediaUrl: body.mediaUrl,
+      mediaType: body.mediaType,
+      spaceId: body.spaceId,
+      spaceHandle: body.spaceHandle,
+      location: body.location,
+      tags: body.tags ? JSON.stringify(body.tags) : null,
+      parentId: body.parentId,
+    });
+    return c.json({ success: true, id: newPostId });
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: 'Failed to create post' }, 500);
+  }
+});
+
+app.post('/posts/:id/vote', async (c) => {
+  const auth = getAuth(c);
+  if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
+
+  try {
+    const postId = c.req.param('id');
+    const body = await c.req.json(); // { value: 1 or -1 }
+    
+    // Check existing vote
+    const existing = await db.query.postVotes.findFirst({
+      where: (votes, { eq, and }) => and(eq(votes.postId, postId), eq(votes.userId, auth.userId))
+    });
+
+    if (existing) {
+      if (existing.vote === body.value) {
+        // Remove vote
+        await db.delete(postVotes).where(eq(postVotes.id, existing.id));
+      } else {
+        // Change vote
+        // Note: SQLite update needs raw sql for atomic updates or separate transactions.
+      }
+    } else {
+      // Add vote
+      await db.insert(postVotes).values({
+        id: uuidv4(),
+        postId,
+        userId: auth.userId,
+        vote: body.value,
+      });
+    }
+
+    // Recalculate likes (simplified)
+    const allVotes = await db.query.postVotes.findMany({ where: eq(postVotes.postId, postId) });
+    const total = allVotes.reduce((sum, v) => sum + v.vote, 0);
+    
+    // In drizzle sqlite, we just do a raw update or use the query builder
+    await db.update(posts).set({ likes: total }).where(eq(posts.id, postId));
+
+    return c.json({ success: true, likes: total });
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: 'Failed to vote' }, 500);
+  }
+});
+
+// --- SPACES ---
+app.get('/spaces', async (c) => {
+  try {
+    const allSpaces = await db.query.spaces.findMany();
+    return c.json(allSpaces);
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: 'Failed to fetch spaces' }, 500);
+  }
+});
+
+app.post('/spaces', async (c) => {
+  const auth = getAuth(c);
+  if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
+
+  try {
+    const body = await c.req.json();
+    const newSpaceId = uuidv4();
+    await ensureUser(auth.userId);
+    
+    await db.insert(spaces).values({
+      id: newSpaceId,
+      name: body.name,
+      handle: body.handle,
+      description: body.description,
+      type: body.type || 'group',
+      ownerId: auth.userId,
+      isPrivate: body.isPrivate || false,
+    });
+
+    // Add owner as member
+    await db.insert(spaceMembers).values({
+      id: uuidv4(),
+      spaceId: newSpaceId,
+      userId: auth.userId,
+      role: 'owner',
+      status: 'accepted',
+    });
+
+    return c.json({ success: true, id: newSpaceId });
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: 'Failed to create space' }, 500);
+  }
+});
+
+app.post('/spaces/:id/join', async (c) => {
+  const auth = getAuth(c);
+  if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
+
+  try {
+    const spaceId = c.req.param('id');
+    const body = await c.req.json(); // { isPrivate: boolean }
+    await ensureUser(auth.userId);
+    
+    await db.insert(spaceMembers).values({
+      id: uuidv4(),
+      spaceId,
+      userId: auth.userId,
+      role: 'member',
+      status: body.isPrivate ? 'pending' : 'accepted',
+    });
+
+    return c.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    return c.json({ error: 'Failed to join space' }, 500);
+  }
+});
+
+export { app };
+export default handle(app);

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { User, MailCheck, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { MailCheck, AlertCircle, Eye, EyeOff } from 'lucide-react';
+import { useUser, useClerk } from '@clerk/clerk-react';
 import { UserProfile, ChatMessage } from './types';
 import {
   subscribeToAuth, loginAnonymously, logoutUser,
@@ -7,10 +8,12 @@ import {
 } from './services/store';
 import { CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 import { Button, Modal, Input } from './components/UI';
-import { MindStream } from './views/Guestbook';
+import { MokaBoard } from './views/Guestbook';
 import { ChatWidget } from './components/ChatWidget';
 
 const App = () => {
+  const { user: clerkUser, isLoaded } = useUser();
+  const clerk = useClerk();
   const [user, setUser] = useState<UserProfile | null>(null);
 
   // Navigation State to pass to Stream
@@ -46,31 +49,21 @@ const App = () => {
   // Status Check
   const isMock = getIsMockMode();
 
-  // --- INITIALIZATION ---
+  // Clerk to App User Mapping
   useEffect(() => {
-    // 1. Auth Subscription
-    const unsub = subscribeToAuth(setUser);
-
-    // 2. Deep Link Check (Thread Sharing)
-    const params = new URLSearchParams(window.location.search);
-    const threadId = params.get('thread');
-    if (threadId) {
-      setInitialThreadId(threadId);
-      // Clean URL without refresh
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-
-    return () => unsub();
-  }, []);
-
-  // Proactive Modal Closure & State Tracking
-  useEffect(() => {
-    console.log('APP_USER_STATE_CHANGED:', user?.uid || 'NONE');
-    if (user) {
-      console.log('User detected (', user.displayName, '), closing login modal');
+    if (isLoaded && clerkUser) {
+      setUser({
+        uid: clerkUser.id,
+        displayName: clerkUser.username || clerkUser.firstName || 'Anonymous',
+        fullName: clerkUser.fullName || undefined,
+        photoURL: clerkUser.imageUrl,
+        isAnonymous: false,
+      });
       setIsLoginOpen(false);
+    } else if (isLoaded) {
+      setUser(null);
     }
-  }, [user]);
+  }, [isLoaded, clerkUser]);
 
   // Subscribe to messages globally if logged in
   useEffect(() => {
@@ -97,158 +90,8 @@ const App = () => {
     return () => window.removeEventListener('open-chat-with-user', handleChatRequest);
   }, []);
 
-  const resetAuthForm = () => {
-    setLoginIdentifier('');
-    setRegisterEmail('');
-    setRegisterUsername('');
-    setAuthPassword('');
-    setAuthError('');
-    setUsernameAvailability('none');
-    setEmailAvailability('none');
-    setRegistrationSuccess(false);
-  };
-
-  // Debounced Username Check
-  useEffect(() => {
-    if (authMode !== 'register' || !registerUsername || registerUsername.length < 3) {
-      setUsernameAvailability('none');
-      return;
-    }
-    setUsernameAvailability('checking');
-    const timer = setTimeout(async () => {
-      try {
-        const isAvailable = await checkUsernameAvailability(registerUsername);
-        setUsernameAvailability(isAvailable ? 'available' : 'taken');
-      } catch (err) {
-        console.error('Availability check failed:', err);
-        setUsernameAvailability('none');
-      }
-    }, 1000);
-    return () => clearTimeout(timer);
-  }, [registerUsername, authMode]);
-
-  // Debounced Email Check
-  useEffect(() => {
-    if (authMode !== 'register' || !registerEmail || !registerEmail.includes('@')) {
-      setEmailAvailability('none');
-      return;
-    }
-    setEmailAvailability('checking');
-    const timer = setTimeout(async () => {
-      try {
-        const isAvailable = await checkEmailAvailability(registerEmail);
-        setEmailAvailability(isAvailable ? 'available' : 'taken');
-      } catch (err) {
-        console.error('Email availability check failed:', err);
-        setEmailAvailability('none');
-      }
-    }, 1000);
-    return () => clearTimeout(timer);
-  }, [registerEmail, authMode]);
-
-  // Password Requirements Check
-  useEffect(() => {
-    setPasswordRequirements({
-      hasUpper: /[A-Z]/.test(authPassword),
-      hasLower: /[a-z]/.test(authPassword),
-      hasNumber: /[0-9]/.test(authPassword),
-      isMinLength: authPassword.length >= 8
-    });
-  }, [authPassword]);
-
-  const handleAuth = async () => {
-    setAuthError('');
-    try {
-      if (authMode === 'login') {
-        if (!loginIdentifier || !authPassword) {
-          setAuthError('Please fill in all fields.');
-          return;
-        }
-        console.log('Login request initiated...');
-        await loginUser(loginIdentifier, authPassword);
-        console.log('loginUser call completed. Waiting for subscription to update state.');
-        // We DO NOT close the modal manually here. 
-        // The useEffect above will close it once 'user' is actually set to a non-null value.
-        resetAuthForm();
-      } else {
-        if (!registerEmail || !authPassword || !registerUsername) {
-          setAuthError('All fields are required.');
-          return;
-        }
-
-        if (usernameAvailability === 'taken') {
-          setAuthError('Username is already taken.');
-          return;
-        }
-
-        if (emailAvailability === 'taken') {
-          setAuthError('Email is already registered.');
-          return;
-        }
-
-        const { hasUpper, hasLower, hasNumber, isMinLength } = passwordRequirements;
-        if (!hasUpper || !hasLower || !hasNumber || !isMinLength) {
-          setAuthError('Please meet all password requirements.');
-          return;
-        }
-
-        // --- EMAIL DOMAIN CHECK START ---
-        const domain = registerEmail.split('@')[1]?.toLowerCase();
-        const allowedDomains = [
-          // Google
-          'gmail.com', 'googlemail.com',
-          // Microsoft
-          'outlook.com', 'hotmail.com', 'live.com', 'msn.com', 'passport.com',
-          // Apple
-          'icloud.com', 'me.com', 'mac.com',
-          // Yahoo
-          'yahoo.com', 'ymail.com', 'rocketmail.com',
-          // Proton
-          'proton.me', 'protonmail.com', 'pm.me',
-          // Zoho
-          'zoho.com', 'zoho.in',
-          // Tutanota
-          'tutanota.com', 'tutanota.de', 'tutamail.com', 'tuta.io', 'tuta.com',
-          // GMX
-          'gmx.com', 'gmx.net', 'gmx.us', 'gmx.de',
-          // AOL
-          'aol.com',
-          // Mail.com
-          'mail.com',
-          // Fastmail
-          'fastmail.com', 'fastmail.fm', 'fastmail.jp', 'fastmail.net',
-          // Yandex
-          'yandex.com', 'yandex.ru', 'yandex.net', 'ya.ru',
-          // Mail.ru
-          'mail.ru', 'list.ru', 'bk.ru', 'inbox.ru',
-          // Others requested
-          'skiff.com', 'hushmail.com', 'hush.com'
-        ];
-
-        const isMajorProvider = allowedDomains.includes(domain) ||
-          (domain && (
-            (domain.startsWith('yahoo.') && domain !== 'yahoo.com') ||
-            (domain.startsWith('outlook.') && domain !== 'outlook.com') ||
-            (domain.startsWith('hotmail.') && domain !== 'hotmail.com')
-          ));
-
-        if (!domain || !isMajorProvider) {
-          setAuthError('Please use a trusted email provider (Gmail, Outlook, Yahoo, iCloud, etc.). Disposable or unknown domains are not allowed.');
-          return;
-        }
-        // --- EMAIL DOMAIN CHECK END ---
-
-        await registerUser(registerEmail, authPassword, registerUsername);
-        setRegistrationSuccess(true);
-      }
-    } catch (e: any) {
-      console.error(e);
-      setAuthError(e.message || 'Authentication failed.');
-    }
-  };
-
   const handleLogout = async () => {
-    await logoutUser();
+    await clerk.signOut();
   };
 
   const handleMarkRead = async (senderId: string) => {
@@ -273,9 +116,9 @@ const App = () => {
         <div className="absolute top-2.5 left-1 z-50 hidden md:block">
           <img src="https://i.ibb.co/mVJPnXxD/5c65fc3a-4f54-409c-827e-884d8e01c5ff.png" alt="logo" className="h-10 w-10" />
         </div>
-        <MindStream
+        <MokaBoard
           user={user}
-          onOpenLogin={() => setIsLoginOpen(true)}
+          onOpenLogin={() => clerk.openSignIn()}
           onLogout={handleLogout}
           initialProfileId={creatorProfileId}
           onClearInitialProfileId={() => setCreatorProfileId(null)}
@@ -302,150 +145,7 @@ const App = () => {
         )}
       </main>
 
-      {/* Global Login/Register Modal */}
-      <Modal isOpen={isLoginOpen} onClose={() => { setIsLoginOpen(false); resetAuthForm(); }} title="Member_Access">
-        <div className="p-2">
-          {registrationSuccess ? (
-            <div className="flex flex-col items-center text-center space-y-4 py-8 animate-fade-in">
-              <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mb-2 border border-green-200">
-                <MailCheck size={32} />
-              </div>
-              <h3 className="font-serif font-bold text-xl">Confirm Your Email</h3>
-              <p className="text-sm text-gray-600 max-w-xs">
-                We've sent a confirmation link to <span className="font-bold">{registerEmail}</span>.
-              </p>
-              <div className="bg-blue-50 border border-blue-200 p-3 text-xs text-blue-800 rounded-md max-w-xs text-left">
-                <strong>Important:</strong> You must click the link in your email to activate your account before you can log in.
-              </div>
-              <Button onClick={() => { setRegistrationSuccess(false); setAuthMode('login'); }} variant="primary" className="mt-4 w-full">
-                RETURN TO LOGIN
-              </Button>
-            </div>
-          ) : (
-            <>
-              <div className="text-center mb-6">
-                <div className="w-12 h-12 bg-black text-white rounded-full flex items-center justify-center mx-auto mb-2 shadow-md">
-                  <User size={24} />
-                </div>
-                <p className="text-sm text-gray-600">Join the community to post, like, and connect.</p>
-              </div>
-
-              {/* Tabs */}
-              <div className="flex border-b border-black mb-4">
-                <button
-                  onClick={() => { setAuthMode('login'); setAuthError(''); setUsernameAvailability('none'); }}
-                  className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider ${authMode === 'login' ? 'bg-black text-white' : 'hover:bg-gray-100 text-gray-500'}`}
-                >
-                  Login
-                </button>
-                <button
-                  onClick={() => { setAuthMode('register'); setAuthError(''); setUsernameAvailability('none'); }}
-                  className={`flex-1 py-2 text-xs font-bold uppercase tracking-wider ${authMode === 'register' ? 'bg-black text-white' : 'hover:bg-gray-100 text-gray-500'}`}
-                >
-                  Register
-                </button>
-              </div>
-
-              {/* Form */}
-              <div className="space-y-3">
-                {authMode === 'register' && (
-                  <div>
-                    <div className="flex justify-between items-center mb-1">
-                      <label className="text-[10px] font-bold uppercase block">Username</label>
-                      <div className="flex items-center gap-1">
-                        {usernameAvailability === 'checking' && <span className="text-[9px] text-gray-400 animate-pulse">CHECKING...</span>}
-                        {usernameAvailability === 'available' && <CheckCircle2 size={12} className="text-blue-500" />}
-                        {usernameAvailability === 'taken' && <span className="text-[9px] text-red-600 font-bold uppercase italic">Not Available</span>}
-                      </div>
-                    </div>
-                    <Input
-                      placeholder="e.g. creative_mind"
-                      value={registerUsername}
-                      onChange={(e) => {
-                        const val = e.target.value.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 15);
-                        setRegisterUsername(val);
-                      }}
-                    />
-                    <p className="text-[9px] text-gray-400 mt-1 italic font-medium">⚠️ Choose carefully! This will be your permanent ID and cannot be changed later.</p>
-                  </div>
-                )}
-
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="text-[10px] font-bold uppercase block">
-                      {authMode === 'login' ? 'Email or Username' : 'Email Address'}
-                    </label>
-                    {authMode === 'register' && (
-                      <div className="flex items-center gap-1">
-                        {emailAvailability === 'checking' && <span className="text-[9px] text-gray-400 animate-pulse">CHECKING...</span>}
-                        {emailAvailability === 'available' && <CheckCircle2 size={12} className="text-blue-500" />}
-                        {emailAvailability === 'taken' && <span className="text-[9px] text-red-600 font-bold uppercase italic">Already in Use</span>}
-                      </div>
-                    )}
-                  </div>
-                  <Input
-                    type={authMode === 'login' ? 'text' : 'email'}
-                    placeholder={authMode === 'login' ? "Email or Username" : "name@example.com"}
-                    value={authMode === 'login' ? loginIdentifier : registerEmail}
-                    onChange={e => authMode === 'login' ? setLoginIdentifier(e.target.value) : setRegisterEmail(e.target.value)}
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[10px] font-bold uppercase block mb-1">Password</label>
-                  <div className="relative">
-                    <Input
-                      type={showPassword ? "text" : "password"}
-                      placeholder="••••••••"
-                      value={authPassword}
-                      onChange={e => setAuthPassword(e.target.value)}
-                      className="pr-8"
-                    />
-                    <button
-                      onClick={() => setShowPassword(!showPassword)}
-                      className="absolute right-2 top-2 text-gray-400 hover:text-black"
-                    >
-                      {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
-                    </button>
-                  </div>
-
-                  {authMode === 'register' && (
-                    <div className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1">
-                      <div className={`text-[9px] flex items-center gap-1 ${passwordRequirements.isMinLength ? 'text-green-600' : 'text-gray-400'}`}>
-                        {passwordRequirements.isMinLength ? <CheckCircle2 size={10} /> : <div className="w-1.5 h-1.5 rounded-full border border-current" />}
-                        8+ Characters
-                      </div>
-                      <div className={`text-[9px] flex items-center gap-1 ${passwordRequirements.hasUpper ? 'text-green-600' : 'text-gray-400'}`}>
-                        {passwordRequirements.hasUpper ? <CheckCircle2 size={10} /> : <div className="w-1.5 h-1.5 rounded-full border border-current" />}
-                        Uppercase
-                      </div>
-                      <div className={`text-[9px] flex items-center gap-1 ${passwordRequirements.hasLower ? 'text-green-600' : 'text-gray-400'}`}>
-                        {passwordRequirements.hasLower ? <CheckCircle2 size={10} /> : <div className="w-1.5 h-1.5 rounded-full border border-current" />}
-                        Lowercase
-                      </div>
-                      <div className={`text-[9px] flex items-center gap-1 ${passwordRequirements.hasNumber ? 'text-green-600' : 'text-gray-400'}`}>
-                        {passwordRequirements.hasNumber ? <CheckCircle2 size={10} /> : <div className="w-1.5 h-1.5 rounded-full border border-current" />}
-                        Number
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {authError && (
-                  <div className="bg-red-50 border border-red-200 p-2 text-xs text-red-600 flex items-start gap-2">
-                    <AlertCircle size={14} className="shrink-0 mt-0.5" />
-                    <span>{authError}</span>
-                  </div>
-                )}
-
-                <Button onClick={handleAuth} variant="primary" className="w-full mt-4 py-2">
-                  {authMode === 'login' ? 'ENTER STREAM' : 'CREATE ACCOUNT'}
-                </Button>
-              </div>
-            </>
-          )}
-        </div>
-      </Modal>
+      {/* Global Login/Register Modal is now handled natively by Clerk via clerk.openSignIn() */}
 
     </div>
   );

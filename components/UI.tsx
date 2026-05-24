@@ -25,6 +25,7 @@ interface WindowProps {
   customMaximizeClass?: string;
   noPadding?: boolean;
   scrollable?: boolean;
+  hideChromeOnMobile?: boolean;
 }
 
 export const Window: React.FC<WindowProps> = ({
@@ -36,6 +37,7 @@ export const Window: React.FC<WindowProps> = ({
   onClose,
   noPadding = false,
   scrollable = !noPadding,
+  hideChromeOnMobile = false,
   customMaximizeClass
 }) => {
   const [isMinimized, setIsMinimized] = useState(false);
@@ -56,9 +58,9 @@ export const Window: React.FC<WindowProps> = ({
     : `relative flex flex-col ${className}`;
 
   return (
-    <div className={`transition-all duration-200 border border-black ${THEME.shadow} ${windowClasses} bg-white ${isMinimized ? 'h-8' : ''}`}>
+    <div className={`transition-all duration-200 ${hideChromeOnMobile ? 'md:border md:border-black md:shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]' : `border border-black ${THEME.shadow}`} ${windowClasses} bg-white ${isMinimized ? 'h-8' : ''}`}>
       {/* Title Bar */}
-      <div className={`h-8 border-b border-black flex items-center px-2 justify-between ${color} select-none shrink-0`}>
+      <div className={`h-8 border-b border-black ${hideChromeOnMobile ? 'hidden md:flex' : 'flex'} items-center px-2 justify-between ${color} select-none shrink-0`}>
         <div className="flex items-center gap-2">
           {Icon && <Icon size={14} />}
           <span className="font-bold text-xs uppercase tracking-wider">{title}</span>

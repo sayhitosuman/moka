@@ -20,11 +20,11 @@ export const MOCK_USER: UserProfile = {
 const MOCK_PROFILES: UserProfile[] = [
   MOCK_USER,
   {
-    uid: 'user2',
-    displayName: 'Aura',
-    fullName: 'Aura Digital',
-    photoURL: 'https://api.dicebear.com/7.x/avataaars/svg?seed=aura',
-    bio: 'Lost in the stream of consciousness...',
+    uid: 'user-3',
+    displayName: 'thinker',
+    fullName: 'Deep Thinker',
+    photoURL: 'https://i.ibb.co/6y405cM/abstract-3.png',
+    bio: 'Lost in the moka of consciousness...',
     isAnonymous: false,
     friendStatus: 'friends'
   },
@@ -54,9 +54,9 @@ const MOCK_SPACES: Space[] = [
     createdAt: new Date()
   },
   {
-    id: 'space2',
-    name: 'MindStream Official',
-    handle: 'p:mindstream',
+    id: 'space-1',
+    name: 'Moka Official',
+    handle: 'p:moka',
     description: 'Official announcements and updates.',
     type: 'page',
     ownerId: 'sumanadmin',

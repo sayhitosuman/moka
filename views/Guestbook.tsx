@@ -921,7 +921,7 @@ export const UserProfileModal = ({
                                   IN {p.tags?.includes('PAGE') ? 'PAGE' : 'GROUP'} {formatHandle(p.spaceHandle, p.tags?.includes('PAGE') ? 'page' : 'group')}
                                 </span>
                               ) : (
-                                <span className="text-[8px] font-black px-1 border border-black uppercase bg-gray-50 text-gray-400">PUBLIC STREAM</span>
+                                <span className="text-[8px] font-black px-1 border border-black uppercase bg-gray-50 text-gray-400">PUBLIC MOKA</span>
                               )}
                             </div>
                           </div>
@@ -945,7 +945,7 @@ export const UserProfileModal = ({
                                 IN {c.tags?.includes('PAGE') ? 'PAGE' : 'GROUP'}
                               </span>
                             ) : (
-                              <span className="text-[7px] font-black border border-gray-200 px-1 text-gray-400 uppercase">STREAM</span>
+                              <span className="text-[7px] font-black border border-gray-200 px-1 text-gray-400 uppercase">MOKA</span>
                             )}
                           </div>
                           {isOwnProfile && <button onClick={(e) => handleDeleteUserPost(c.id, e)} className="p-1 border border-black bg-white hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors"><Trash2 size={12} /></button>}
@@ -1062,7 +1062,138 @@ export const UserProfileModal = ({
 };
 
 
-export const MindStream = ({
+
+
+// --- MOBILE REEL CARD (Instagram/TikTok style for Blinks on mobile) ---
+const MobileReelCard: React.FC<{
+  blink: Comment;
+  onUserClick: (uid: string) => void;
+  onVote: (id: string, val: number) => void;
+  onShare: (blink: Comment) => void;
+}> = ({ blink, onUserClick, onVote, onShare }) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [muted, setMuted] = useState(true);
+
+  useEffect(() => {
+    const el = containerRef.current;
+    const vid = videoRef.current;
+    if (!el || !vid) return;
+    const obs = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) { vid.play().catch(() => {}); setIsPlaying(true); }
+        else { vid.pause(); setIsPlaying(false); }
+      },
+      { threshold: 0.6 }
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  const togglePlay = () => {
+    const vid = videoRef.current;
+    if (!vid) return;
+    if (vid.paused) { vid.play(); setIsPlaying(true); }
+    else { vid.pause(); setIsPlaying(false); }
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="h-[calc(100dvh-128px)] snap-start shrink-0 relative overflow-hidden bg-black select-none"
+      onClick={togglePlay}
+    >
+      {blink.mediaUrl && (
+        <video
+          ref={videoRef}
+          src={blink.mediaUrl}
+          className="absolute inset-0 w-full h-full object-cover"
+          loop
+          muted={muted}
+          playsInline
+        />
+      )}
+      {/* Play/pause overlay */}
+      {!isPlaying && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+          <div className="w-20 h-20 bg-black/40 rounded-full flex items-center justify-center backdrop-blur-sm animate-fade-in">
+            <PlaySquare size={36} className="text-white" />
+          </div>
+        </div>
+      )}
+      {/* Gradient overlays */}
+      <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
+      <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-transparent pointer-events-none" />
+
+      {/* Bottom-left author + caption */}
+      <div className="absolute bottom-6 left-4 right-20">
+        <button
+          onClick={(e) => { e.stopPropagation(); onUserClick(blink.authorId); }}
+          className="flex items-center gap-2 mb-3"
+        >
+          <div className="w-9 h-9 rounded-full bg-white overflow-hidden border-2 border-white shadow-lg shrink-0">
+            {blink.authorPhoto
+              ? <img src={blink.authorPhoto} className="w-full h-full object-cover" />
+              : <User size={16} className="text-black m-1.5" />}
+          </div>
+          <span className="text-white font-black text-sm tracking-tight drop-shadow-lg">u:{blink.authorName}</span>
+        </button>
+        {blink.title && <p className="text-white font-black text-base mb-1 leading-tight drop-shadow-lg">{blink.title}</p>}
+        <p className="text-white/85 text-xs leading-relaxed line-clamp-2 drop-shadow-md">{blink.text}</p>
+        {blink.location && (
+          <div className="flex items-center gap-1 mt-2 text-yellow-400 text-[10px] font-black">
+            <Compass size={10} /> {blink.location}
+          </div>
+        )}
+        {blink.tags && blink.tags.length > 0 && (
+          <div className="flex flex-wrap gap-1 mt-1">
+            {blink.tags.slice(0, 4).map((tag, i) => (
+              <span key={i} className="text-white/60 text-[9px] font-bold">#{tag}</span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Right-side action buttons (Instagram style) */}
+      <div
+        className="absolute right-3 bottom-8 flex flex-col gap-5 items-center"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Like */}
+        <div className="flex flex-col items-center gap-1">
+          <button
+            onClick={() => onVote(blink.id, 1)}
+            className={`w-12 h-12 rounded-full flex items-center justify-center backdrop-blur-md transition-all active:scale-90 border shadow-lg ${blink.userVote === 1 ? 'bg-red-500/30 border-red-400' : 'bg-white/10 border-white/20'}`}
+          >
+            <Heart size={24} className={blink.userVote === 1 ? 'text-red-400 fill-red-400' : 'text-white'} strokeWidth={2} />
+          </button>
+          <span className="text-white text-[10px] font-black drop-shadow">{blink.likes || 0}</span>
+        </div>
+        {/* Share */}
+        <div className="flex flex-col items-center gap-1">
+          <button
+            onClick={() => onShare(blink)}
+            className="w-12 h-12 rounded-full bg-white/10 border border-white/20 flex items-center justify-center backdrop-blur-md active:scale-90 transition-all shadow-lg"
+          >
+            <Share2 size={22} className="text-white" strokeWidth={2} />
+          </button>
+          <span className="text-white text-[10px] font-black drop-shadow">Share</span>
+        </div>
+        {/* Mute toggle */}
+        <button
+          onClick={() => { const n = !muted; setMuted(n); if (videoRef.current) videoRef.current.muted = n; }}
+          className="w-12 h-12 rounded-full bg-white/10 border border-white/20 flex items-center justify-center backdrop-blur-md active:scale-90 transition-all shadow-lg"
+        >
+          <span className="text-xl select-none">{muted ? '🔇' : '🔊'}</span>
+        </button>
+      </div>
+    </div>
+  );
+};
+
+
+export const MokaBoard = ({
   user,
   onOpenLogin,
   onLogout,
@@ -1092,8 +1223,8 @@ export const MindStream = ({
   const [isPosting, setIsPosting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // View State: 'stream' | 'spaces' | 'blinks'
-  const [activeView, setActiveView] = useState<'stream' | 'spaces' | 'blinks'>('stream');
+  // View State: 'moka' | 'spaces' | 'blinks'
+  const [activeView, setActiveView] = useState<'moka' | 'spaces' | 'blinks'>('moka');
   const [activeSpace, setActiveSpace] = useState<Space | null>(null);
 
   // Use ID to track active thread so updates to 'thoughts' propagate immediately to the view
@@ -1474,7 +1605,7 @@ export const MindStream = ({
         type: newSpaceType,
         owner_id: user.uid
       });
-      if (freshSpace) {
+      if (freshSpace !== null) {
         setSpaces(prev => [freshSpace, ...prev]);
         setUserSpaces(prev => [freshSpace, ...prev]); // Add to my clusters
         setActiveSpace(freshSpace);
@@ -1597,19 +1728,19 @@ export const MindStream = ({
       id: tempId,
       postId: 'stream',
       parentId: parentId || null,
-      title: null,
+      title: undefined,
       text,
       authorId: user.uid,
       authorName: user.displayName,
       authorPhoto: user.photoURL,
-      mediaUrl: blobUrl,
-      mediaType: mediaType,
+      mediaUrl: blobUrl ?? undefined,
+      mediaType: mediaType ?? undefined,
       mediaItems: [],
       likes: 0,
       createdAt: { toDate: () => new Date() },
       children: [],
-      spaceId: activeSpace?.id || null,
-      spaceHandle: activeSpace?.handle || null
+      spaceId: activeSpace?.id ?? undefined,
+      spaceHandle: activeSpace?.handle ?? undefined
     };
 
     const addNodeToTree = (nodes: Comment[], newNode: Comment): Comment[] => {
@@ -1753,9 +1884,9 @@ export const MindStream = ({
           <div className="md:hidden flex items-center justify-between px-5 py-4 border-b border-gray-100 bg-white">
             <div
               className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={() => { setActiveView('stream'); setActiveSpace(null); setIsSidebarOpen(false); }}
+              onClick={() => { setActiveView('moka'); setActiveSpace(null); setIsSidebarOpen(false); }}
             >
-              <h2 className="font-serif font-black text-xl tracking-tight text-gray-900 leading-none">Stream</h2>
+              <h2 className="font-serif font-black text-xl tracking-tight text-gray-900 leading-none">Moka</h2>
               {canPost && (
                 <button
                   onClick={(e) => { e.stopPropagation(); setIsNotifOpen(true); }}
@@ -1779,9 +1910,9 @@ export const MindStream = ({
           <div className="px-5 py-5 border-b border-gray-100 hidden md:flex items-center justify-between bg-white/50">
             <div
               className="flex flex-col items-start cursor-pointer hover:opacity-80 transition-opacity"
-              onClick={() => { setActiveView('stream'); setActiveSpace(null); }}
+              onClick={() => { setActiveView('moka'); setActiveSpace(null); }}
             >
-              <h2 className="font-serif text-xl font-black tracking-tight text-gray-900 leading-none ml-5">Stream</h2>
+              <h2 className="font-serif text-xl font-black tracking-tight text-gray-900 leading-none ml-5">Moka</h2>
               <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-0.5 opacity-70">The living collective mind</p>
             </div>
             {canPost && (
@@ -1958,19 +2089,19 @@ export const MindStream = ({
               <label className="text-[10px] font-black uppercase text-gray-400 mb-2 block tracking-widest">Top Interests</label>
               <div className="flex flex-wrap gap-2">
                 <span
-                  onClick={() => { setSearchQuery('Exploration'); setActiveView('stream'); setIsSidebarOpen(false); }}
+                  onClick={() => { setSearchQuery('Exploration'); setActiveView('moka'); setIsSidebarOpen(false); }}
                   className="px-3 py-1.5 bg-white border border-gray-100 rounded-xl text-[10px] font-bold text-gray-600 hover:border-black cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm active:scale-95"
                 >
                   <Compass size={12} className="text-blue-500" /> Exploration
                 </span>
                 <span
-                  onClick={() => { setSearchQuery('Digital Art'); setActiveView('stream'); setIsSidebarOpen(false); }}
+                  onClick={() => { setSearchQuery('Digital Art'); setActiveView('moka'); setIsSidebarOpen(false); }}
                   className="px-3 py-1.5 bg-white border border-gray-100 rounded-xl text-[10px] font-bold text-gray-600 hover:border-black cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm active:scale-95"
                 >
                   <Heart size={12} className="text-red-500" /> Digital Art
                 </span>
                 <span
-                  onClick={() => { setSearchQuery('Startups'); setActiveView('stream'); setIsSidebarOpen(false); }}
+                  onClick={() => { setSearchQuery('Startups'); setActiveView('moka'); setIsSidebarOpen(false); }}
                   className="px-3 py-1.5 bg-white border border-gray-100 rounded-xl text-[10px] font-bold text-gray-600 hover:border-black cursor-pointer transition-colors flex items-center gap-1.5 shadow-sm active:scale-95"
                 >
                   <Activity size={12} className="text-green-500" /> Startups
@@ -2045,46 +2176,72 @@ export const MindStream = ({
             ) : (
               <>
                 <div className="flex items-center gap-3">
-                  {activeView !== 'stream' ? (
+                  {activeThreadId ? (
                     <button
-                      onClick={() => {
-                        if (activeSpace) setActiveSpace(null);
-                        else setActiveView('stream');
-                      }}
+                      onClick={() => setActiveThreadId(null)}
+                      className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-50 text-black border border-gray-100 shadow-sm active:scale-90 transition-all"
+                    >
+                      <ChevronLeft size={18} />
+                    </button>
+                  ) : activeSpace ? (
+                    <button
+                      onClick={() => setActiveSpace(null)}
+                      className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-50 text-black border border-gray-100 shadow-sm active:scale-90 transition-all"
+                    >
+                      <ChevronLeft size={18} />
+                    </button>
+                  ) : activeView !== 'moka' ? (
+                    <button
+                      onClick={() => setActiveView('moka')}
                       className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-50 text-black border border-gray-100 shadow-sm active:scale-90 transition-all"
                     >
                       <ChevronLeft size={18} />
                     </button>
                   ) : (
                     <button
-                      onClick={() => setIsSidebarOpen(true)}
-                      className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-50 text-black border border-gray-100 shadow-sm active:scale-90 transition-all"
+                      onClick={() => canPost ? setProfileTargetId(user.uid) : onOpenLogin()}
+                      className="w-9 h-9 flex items-center justify-center rounded-full bg-gray-100 text-black border border-gray-200 shadow-inner overflow-hidden active:scale-90 transition-all shrink-0"
                     >
-                      <Menu size={18} />
-                      {unreadCount > 0 && (
-                        <span className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white" />
+                      {canPost && user?.photoURL ? (
+                        <img src={user.photoURL} alt="profile" className="w-full h-full object-cover" />
+                      ) : (
+                        <User size={16} />
                       )}
                     </button>
                   )}
-                  <h1 className="font-serif font-black text-2xl tracking-tight text-gray-900 capitalize truncate max-w-[150px]">
-                    {activeSpace ? activeSpace.name : activeView}
+                  <h1 className="font-serif font-black text-2xl tracking-tight text-gray-900 capitalize truncate max-w-[150px] select-none">
+                    {activeSpace ? activeSpace.name : (activeThreadId ? 'Thread' : (activeView === 'moka' ? 'Moka' : activeView))}
                   </h1>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setIsMobileSearchOpen(true)}
-                    className="w-10 h-10 flex items-center justify-center text-gray-400 hover:text-black active:scale-95 transition-all"
-                  >
-                    <Search size={22} strokeWidth={1.5} />
-                  </button>
+                  {canPost && (
+                    <button
+                      onClick={() => setIsNotifOpen(true)}
+                      className="relative w-10 h-10 flex items-center justify-center text-gray-400 hover:text-black active:scale-95 transition-all"
+                    >
+                      <Bell size={20} strokeWidth={2} />
+                      {unreadNotifsCount > 0 && (
+                        <span className="absolute top-1.5 right-1.5 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center text-[9px] font-bold border-2 border-white">
+                          {unreadNotifsCount}
+                        </span>
+                      )}
+                    </button>
+                  )}
 
-                  <button
-                    onClick={() => canPost ? setIsCreateOpen(true) : onOpenLogin()}
-                    className="w-10 h-10 flex items-center justify-center rounded-full bg-black text-white shadow-lg active:scale-90 transition-all"
-                  >
-                    <Edit2 size={18} />
-                  </button>
+                  {onToggleChat && (
+                    <button
+                      onClick={() => canPost ? onToggleChat() : onOpenLogin()}
+                      className="relative w-10 h-10 flex items-center justify-center text-gray-400 hover:text-black active:scale-95 transition-all"
+                    >
+                      <MessageCircle size={20} strokeWidth={2} />
+                      {unreadCount > 0 && (
+                        <span className="absolute top-1.5 right-1.5 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center text-[9px] font-bold border-2 border-white animate-bounce">
+                          {unreadCount}
+                        </span>
+                      )}
+                    </button>
+                  )}
                 </div>
               </>
             )}
@@ -2110,8 +2267,8 @@ export const MindStream = ({
                     {[
                       { key: 'all', label: 'All', count: searchResults.length },
                       { key: 'user', label: 'Users', count: searchResults.filter(r => r.type === 'user').length },
-                      { key: 'group', label: 'Groups', count: searchResults.filter(r => r.type === 'group').length },
-                      { key: 'page', label: 'Pages', count: searchResults.filter(r => r.type === 'page').length }
+                      { key: 'group', label: 'Groups', count: searchResults.filter(r => (r.type as string) === 'group').length },
+                      { key: 'page', label: 'Pages', count: searchResults.filter(r => (r.type as string) === 'page').length }
                     ].map(filter => (
                       <button
                         key={filter.key}
@@ -2193,8 +2350,8 @@ export const MindStream = ({
 
           {/* Added min-h-0 to ensure flex container allows scrolling inside this div */}
           <div className="flex-1 overflow-y-auto relative min-h-0">
-            {/* STREAM VIEW */}
-            {activeView === 'stream' && (
+            {/* MOKA VIEW */}
+            {activeView === 'moka' && (
               <div className="divide-y divide-gray-200">
                 {filteredThoughts.length > 0 ? (
                   filteredThoughts.map(t => (
@@ -2218,22 +2375,23 @@ export const MindStream = ({
                 ) : (
                   <div className="p-12 text-center flex flex-col items-center justify-center h-full text-gray-400 gap-2">
                     <Activity size={32} className="opacity-20" />
-                    <span className="font-mono text-sm">{searchQuery ? 'No matching thoughts.' : 'Stream is quiet. Be the first to post.'}</span>
+                    <span className="font-mono text-sm">{searchQuery ? 'No matching thoughts.' : 'Moka is empty. Be the first to post.'}</span>
                   </div>
                 )}
                 {/* Bottom spacer for mobile nav */}
-                <div className="h-12 md:hidden"></div>
+                <div className="h-20 md:hidden"></div>
               </div>
             )}
 
             {/* SPACES VIEW (Dashboard or Specific Space) */}
             {activeView === 'spaces' && (
-              <div className="flex-1 h-full bg-[#f4f4f5] p-2 md:p-4 overflow-hidden flex flex-col">
+              <div className="flex-1 h-full bg-[#f4f4f5] p-0 md:p-4 overflow-hidden flex flex-col">
                 <Window
                   title={activeSpace ? `Space_Link: ${activeSpace.handle}` : 'SPACES // Explorer'}
                   color={THEME.green}
                   className="h-full flex flex-col"
                   noPadding
+                  hideChromeOnMobile
                 >
                   <div className="flex-1 flex flex-col overflow-hidden bg-white">
                     {activeSpace ? (
@@ -2802,6 +2960,8 @@ export const MindStream = ({
 
 
                         </div>
+                        {/* Bottom spacer for mobile nav */}
+                        <div className="h-20 md:hidden"></div>
                       </div>
                     )}
                   </div>
@@ -2811,73 +2971,174 @@ export const MindStream = ({
 
             {/* BLINKS VIEW */}
             {activeView === 'blinks' && (
-              <div className="flex-1 h-full bg-[#f4f4f5] p-2 md:p-4 overflow-hidden flex flex-col">
-                <Window
-                  title="Flash_Stream // Blinks"
-                  color={THEME.accent}
-                  className="h-full flex flex-col"
-                  noPadding
+              <>
+                {/* ── MOBILE: TikTok / Instagram Reels style fullscreen snap-scroll ── */}
+                <div
+                  className="md:hidden flex-1 overflow-y-scroll snap-y snap-mandatory bg-black"
+                  style={{ scrollbarWidth: 'none' } as React.CSSProperties}
                 >
-                  <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-white custom-scrollbar">
-                    <div className="max-w-5xl mx-auto">
-                      <div className="mb-12 text-center">
-                        <div className="inline-flex items-center justify-center w-24 h-24 bg-black border-2 border-black shadow-[8px_8px_0px_0px_rgba(209,184,214,1)] mb-8">
-                          <PlaySquare size={44} className="text-white" strokeWidth={2.5} />
-                        </div>
-                        <h2 className="text-5xl font-black mb-3 tracking-tighter uppercase">Flash_Blinks</h2>
-                        <p className="text-gray-400 text-xs font-black uppercase tracking-[0.3em] max-w-md mx-auto italic mb-8">Short stories // Shared memories // Infinite possibilities</p>
-                        <Button
-                          variant="primary"
-                          className="px-8 py-3 font-black text-xs tracking-[0.2em]"
-                          onClick={() => { if (!user) onOpenLogin(); else { setIsCreateReelOpen(true); setReelStep(1); } }}
-                        >
-                          <Plus size={16} className="mr-2" /> POST_NEW_REEL
-                        </Button>
-                      </div>
+                  {thoughts.filter(t => t.mediaType === 'video').length > 0 ? (
+                    thoughts.filter(t => t.mediaType === 'video').map((blink) => (
+                      <MobileReelCard
+                        key={blink.id}
+                        blink={blink}
+                        onUserClick={(uid) => setProfileTargetId(uid)}
+                        onVote={handleVote}
+                        onShare={handleShare}
+                      />
+                    ))
+                  ) : (
+                    <div className="h-[calc(100dvh-128px)] snap-start shrink-0 flex flex-col items-center justify-center gap-4 text-white/40 px-8">
+                      <PlaySquare size={56} strokeWidth={1} />
+                      <p className="font-black text-sm uppercase tracking-widest text-center">No Blinks yet</p>
+                      <button
+                        onClick={() => { if (!user) onOpenLogin(); else { setIsCreateReelOpen(true); setReelStep(1); } }}
+                        className="mt-3 px-6 py-3 bg-white text-black rounded-full font-black text-xs tracking-widest active:scale-95 transition-all"
+                      >
+                        + POST BLINK
+                      </button>
+                    </div>
+                  )}
+                </div>
 
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-12">
-                        {thoughts.filter(t => t.mediaType === 'video').length > 0 ? (
-                          thoughts.filter(t => t.mediaType === 'video').map((blink) => (
-                            <div
-                              key={blink.id}
-                              onClick={() => setOpenedBlinkId(blink.id)}
-                              className="group relative aspect-[9/16] bg-black border-2 border-black overflow-hidden cursor-pointer shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all duration-300"
-                            >
-                              <video src={blink.mediaUrl} className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" />
-                              <div className="absolute inset-0 flex flex-col items-center justify-center p-6 text-center group-hover:hidden">
-                                <PlaySquare size={32} className="text-white mb-4 drop-shadow-md" />
-                              </div>
-                              <div className="absolute bottom-0 left-0 right-0 p-4 bg-black/80 text-white translate-y-full group-hover:translate-y-0 transition-transform">
-                                <div className="flex items-center gap-2">
-                                  <div className="w-6 h-6 bg-white shrink-0 border border-black overflow-hidden">
-                                    {blink.authorPhoto ? <img src={blink.authorPhoto} alt="" className="w-full h-full object-cover" /> : <User size={12} className="text-black ml-1 mt-1" />}
-                                  </div>
-                                  <div className="min-w-0">
-                                    <p className="text-[9px] font-black uppercase truncate">#{blink.authorName}</p>
-                                    <p className="text-[8px] font-medium opacity-70 uppercase tracking-tighter line-clamp-1">{blink.title || blink.text}</p>
-                                  </div>
+                {/* ── DESKTOP: Grid with Window chrome ── */}
+                <div className="hidden md:flex flex-1 h-full bg-[#f4f4f5] p-4 overflow-hidden flex-col">
+                  <Window
+                    title="Flash_Moka // Blinks"
+                    color={THEME.accent}
+                    className="h-full flex flex-col"
+                    noPadding
+                  >
+                    <div className="flex-1 overflow-y-auto p-8 bg-white custom-scrollbar">
+                      <div className="max-w-5xl mx-auto">
+                        <div className="mb-12 text-center">
+                          <div className="inline-flex items-center justify-center w-24 h-24 bg-black border-2 border-black shadow-[8px_8px_0px_0px_rgba(209,184,214,1)] mb-8">
+                            <PlaySquare size={44} className="text-white" strokeWidth={2.5} />
+                          </div>
+                          <h2 className="text-5xl font-black mb-3 tracking-tighter uppercase">Flash_Blinks</h2>
+                          <p className="text-gray-400 text-xs font-black uppercase tracking-[0.3em] max-w-md mx-auto italic mb-8">Short stories // Shared memories // Infinite possibilities</p>
+                          <Button
+                            variant="primary"
+                            className="px-8 py-3 font-black text-xs tracking-[0.2em]"
+                            onClick={() => { if (!user) onOpenLogin(); else { setIsCreateReelOpen(true); setReelStep(1); } }}
+                          >
+                            <Plus size={16} className="mr-2" /> POST_NEW_REEL
+                          </Button>
+                        </div>
+                        <div className="grid grid-cols-4 gap-6 mb-12">
+                          {thoughts.filter(t => t.mediaType === 'video').length > 0 ? (
+                            thoughts.filter(t => t.mediaType === 'video').map((blink) => (
+                              <div
+                                key={blink.id}
+                                onClick={() => setOpenedBlinkId(blink.id)}
+                                className="group relative aspect-[9/16] bg-black border-2 border-black overflow-hidden cursor-pointer shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all duration-300"
+                              >
+                                <video src={blink.mediaUrl} className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-100 transition-opacity" />
+                                <div className="absolute inset-0 flex items-center justify-center group-hover:hidden">
+                                  <PlaySquare size={32} className="text-white drop-shadow-md" />
+                                </div>
+                                <div className="absolute bottom-0 left-0 right-0 p-3 bg-black/80 text-white translate-y-full group-hover:translate-y-0 transition-transform">
+                                  <p className="text-[9px] font-black uppercase truncate">#{blink.authorName}</p>
+                                  <p className="text-[8px] opacity-70 uppercase tracking-tighter line-clamp-1">{blink.title || blink.text}</p>
                                 </div>
                               </div>
-                            </div>
-                          ))
-                        ) : (
-                          [1, 2, 3, 4].map((i) => (
-                            <div
-                              key={i}
-                              className="group relative aspect-[9/16] bg-gray-50 border-2 border-black overflow-hidden cursor-pointer shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:shadow-none hover:translate-x-[2px] hover:translate-y-[2px] transition-all duration-300 flex flex-col items-center justify-center opacity-30"
-                            >
-                              <PlaySquare size={32} className="text-black mb-2" />
-                              <p className="text-[8px] font-black uppercase tracking-widest">Waiting_for_Signal...</p>
-                            </div>
-                          ))
-                        )}
+                            ))
+                          ) : (
+                            [1, 2, 3, 4].map((i) => (
+                              <div key={i} className="aspect-[9/16] bg-gray-50 border-2 border-black flex flex-col items-center justify-center opacity-30">
+                                <PlaySquare size={32} className="text-black mb-2" />
+                                <p className="text-[8px] font-black uppercase tracking-widest">Waiting_for_Signal...</p>
+                              </div>
+                            ))
+                          )}
+                        </div>
                       </div>
-
                     </div>
-                  </div>
-                </Window>
-              </div>
+                  </Window>
+                </div>
+              </>
             )}
+          </div>
+
+          {/* Mobile App-like Bottom Navigation Bar */}
+          <div className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-white/95 backdrop-blur-md border-t border-gray-100 flex items-center justify-around h-16 pb-safe px-4 shadow-[0_-8px_30px_rgba(0,0,0,0.05)]">
+            {/* Feed Button */}
+            <button
+              onClick={() => {
+                setActiveView('moka');
+                setActiveSpace(null);
+                setActiveThreadId(null);
+                setIsMobileSearchOpen(false);
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+              }}
+              className={`flex flex-col items-center justify-center w-12 h-12 transition-all duration-250 ${
+                activeView === 'moka' && !activeSpace && !isMobileSearchOpen
+                  ? 'text-black scale-105'
+                  : 'text-gray-400 hover:text-gray-600 active:scale-95'
+              }`}
+            >
+              <Compass size={20} strokeWidth={activeView === 'moka' && !activeSpace && !isMobileSearchOpen ? 2.5 : 2} />
+              <span className="text-[9px] font-black tracking-tight mt-0.5">FEED</span>
+            </button>
+
+            {/* Search Button */}
+            <button
+              onClick={() => {
+                setIsMobileSearchOpen(true);
+              }}
+              className={`flex flex-col items-center justify-center w-12 h-12 transition-all duration-250 ${
+                isMobileSearchOpen
+                  ? 'text-black scale-105'
+                  : 'text-gray-400 hover:text-gray-600 active:scale-95'
+              }`}
+            >
+              <Search size={20} strokeWidth={isMobileSearchOpen ? 2.5 : 2} />
+              <span className="text-[9px] font-black tracking-tight mt-0.5">SEARCH</span>
+            </button>
+
+            {/* Post Button - Elevated Action Style */}
+            <div className="relative -mt-6">
+              <button
+                onClick={() => (canPost ? setIsCreateOpen(true) : onOpenLogin())}
+                className="w-14 h-14 bg-black text-white rounded-full flex items-center justify-center shadow-[0_4px_20px_rgba(0,0,0,0.3)] active:scale-90 active:bg-stone-900 transition-all border-4 border-white"
+              >
+                <Plus size={24} strokeWidth={3} />
+              </button>
+            </div>
+
+            {/* Spaces Button */}
+            <button
+              onClick={() => {
+                setActiveView('spaces');
+                setActiveSpace(null);
+                setIsMobileSearchOpen(false);
+              }}
+              className={`flex flex-col items-center justify-center w-12 h-12 transition-all duration-250 ${
+                activeView === 'spaces'
+                  ? 'text-black scale-105'
+                  : 'text-gray-400 hover:text-gray-600 active:scale-95'
+              }`}
+            >
+              <Users size={20} strokeWidth={activeView === 'spaces' ? 2.5 : 2} />
+              <span className="text-[9px] font-black tracking-tight mt-0.5">SPACES</span>
+            </button>
+
+            {/* Blinks Button */}
+            <button
+              onClick={() => {
+                setActiveView('blinks');
+                setActiveSpace(null);
+                setIsMobileSearchOpen(false);
+              }}
+              className={`flex flex-col items-center justify-center w-12 h-12 transition-all duration-250 ${
+                activeView === 'blinks'
+                  ? 'text-black scale-105'
+                  : 'text-gray-400 hover:text-gray-600 active:scale-95'
+              }`}
+            >
+              <PlaySquare size={20} strokeWidth={activeView === 'blinks' ? 2.5 : 2} />
+              <span className="text-[9px] font-black tracking-tight mt-0.5">BLINKS</span>
+            </button>
           </div>
         </div>
       </div>
@@ -3435,7 +3696,7 @@ export const MindStream = ({
                 )}
               </div>
               <div>
-                <div className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Thought Stream</div>
+                <div className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Thought Moka</div>
                 <div className="text-xl font-bold">u:{shareCardThread.authorName}</div>
               </div>
             </div>
@@ -3730,7 +3991,7 @@ export const MindStream = ({
                         <div className="flex gap-1">
                           <button
                             onClick={async () => {
-                              await respondToSpaceRequest(activeSpace!.id, m.uid, true);
+                              await respondToSpaceRequest(activeSpace!.id, m.uid, 'accept');
                               setPendingMembers(prev => prev.filter(p => p.uid !== m.uid));
                               fetchSpaceMembers(activeSpace!.id).then(setSpaceMembers);
                             }}
@@ -3740,7 +4001,7 @@ export const MindStream = ({
                           </button>
                           <button
                             onClick={async () => {
-                              await respondToSpaceRequest(activeSpace!.id, m.uid, false);
+                              await respondToSpaceRequest(activeSpace!.id, m.uid, 'decline');
                               setPendingMembers(prev => prev.filter(p => p.uid !== m.uid));
                             }}
                             className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg"
@@ -3944,7 +4205,7 @@ export const MindStream = ({
                     <div className="p-4 bg-gray-50 border border-dashed border-gray-200 rounded-xl text-center">
                       <p className="text-xs text-gray-400 mb-2">Build your network to invite people!</p>
                       <button
-                        onClick={() => { setIsMemberManageOpen(false); setActiveView('stream'); setSearchQuery(''); }}
+                        onClick={() => { setIsMemberManageOpen(false); setActiveView('moka'); setSearchQuery(''); }}
                         className="text-[10px] font-black text-black underline uppercase tracking-widest"
                       >
                         Find Peers
