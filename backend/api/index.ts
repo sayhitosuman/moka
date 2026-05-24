@@ -6,10 +6,6 @@ import { users, posts, postVotes, spaces, spaceMembers } from '../src/db/schema'
 import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 
-export const config = {
-  runtime: 'edge',
-};
-
 const app = new Hono().basePath('/api');
 
 const ensureUser = async (userId: string) => {
