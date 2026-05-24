@@ -54,11 +54,21 @@ app.use('*', async (c, next) => {
   await next();
 });
 
-// Clerk Auth Middleware
-app.use('*', clerkMiddleware());
-
 // Health Check
 app.get('/health', (c) => c.json({ status: 'ok', message: 'Hono Backend is running!' }));
+
+app.get('/diagnostics/env', (c) => c.json({
+  clerkPublishableKey: Boolean(process.env.CLERK_PUBLISHABLE_KEY),
+  clerkSecretKey: Boolean(process.env.CLERK_SECRET_KEY),
+  tursoDatabaseUrl: Boolean(process.env.TURSO_DATABASE_URL),
+  tursoAuthToken: Boolean(process.env.TURSO_AUTH_TOKEN),
+  cloudinaryCloudName: Boolean(process.env.CLOUDINARY_CLOUD_NAME),
+  cloudinaryApiKey: Boolean(process.env.CLOUDINARY_API_KEY),
+  cloudinaryApiSecret: Boolean(process.env.CLOUDINARY_API_SECRET),
+}));
+
+// Clerk Auth Middleware
+app.use('*', clerkMiddleware());
 
 // --- Users ---
 app.get('/users/me', async (c) => {
