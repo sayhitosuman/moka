@@ -19,7 +19,9 @@ CLOUDINARY_API_KEY=
 CLOUDINARY_API_SECRET=
 ```
 
-Use `backend` as the Vercel project root directory.
+**Recommended:** set the Vercel project **Root Directory** to `backend`.
+
+If the project root is the repo root instead, the root `vercel.json` routes `/api/*` to `backend/api` and `backend/package.json` must use `"type": "module"` (ESM).
 
 Build command:
 
