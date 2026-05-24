@@ -1,12 +1,21 @@
 import { Hono } from 'hono';
 import { handle } from 'hono/vercel';
 import { eq, desc } from 'drizzle-orm';
-import { v4 as uuidv4 } from 'uuid';
 
-// Routes are /health, /posts, etc. Vercel's api/ folder already serves under /api/*.
-const app = new Hono();
+const newId = () => crypto.randomUUID();
+
+// Vercel may invoke this function with /health or /api/health depending on rewrites.
+const api = new Hono();
 
 const PUBLIC_PATHS = new Set(['/health', '/diagnostics/env', '/webhooks/clerk']);
+
+const normalizePath = (path: string) => {
+  if (path === '/api' || path === '/api/') return '/';
+  if (path.startsWith('/api/')) return path.slice(4);
+  return path;
+};
+
+const isPublicPath = (path: string) => PUBLIC_PATHS.has(normalizePath(path));
 
 const ensureUser = async (userId: string) => {
   const { db } = await import('../src/db');
@@ -49,7 +58,7 @@ const toStringArray = (value: unknown) => {
 };
 
 // Middleware to parse JSON
-app.use('*', async (c, next) => {
+api.use('*', async (c, next) => {
   // CORS configuration
   c.header('Access-Control-Allow-Origin', '*'); // Update in production to your domain
   c.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -63,9 +72,9 @@ app.use('*', async (c, next) => {
 });
 
 // Health Check
-app.get('/health', (c) => c.json({ status: 'ok', message: 'Hono Backend is running!' }));
+api.get('/health', (c) => c.json({ status: 'ok', message: 'Hono Backend is running!' }));
 
-app.get('/diagnostics/env', (c) => c.json({
+api.get('/diagnostics/env', (c) => c.json({
   clerkPublishableKey: Boolean(process.env.CLERK_PUBLISHABLE_KEY),
   clerkSecretKey: Boolean(process.env.CLERK_SECRET_KEY),
   tursoDatabaseUrl: Boolean(process.env.TURSO_DATABASE_URL),
@@ -76,7 +85,7 @@ app.get('/diagnostics/env', (c) => c.json({
 }));
 
 // Webhook from Clerk to create user in Turso (no auth middleware)
-app.post('/webhooks/clerk', async (c) => {
+api.post('/webhooks/clerk', async (c) => {
   const body = await c.req.json();
 
   if (body.type === 'user.created') {
@@ -102,8 +111,8 @@ app.post('/webhooks/clerk', async (c) => {
 });
 
 // Clerk Auth Middleware (skip public routes)
-app.use('*', async (c, next) => {
-  if (PUBLIC_PATHS.has(c.req.path)) {
+api.use('*', async (c, next) => {
+  if (isPublicPath(c.req.path)) {
     return next();
   }
   const { clerkMiddleware } = await import('@hono/clerk-auth');
@@ -111,7 +120,7 @@ app.use('*', async (c, next) => {
 });
 
 // --- Users ---
-app.get('/users/me', async (c) => {
+api.get('/users/me', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) {
     return c.json({ error: 'Unauthorized' }, 401);
@@ -136,7 +145,7 @@ app.get('/users/me', async (c) => {
 });
 
 // --- Storage (Cloudinary) ---
-app.post('/storage/signature', async (c) => {
+api.post('/storage/signature', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -169,7 +178,7 @@ app.post('/storage/signature', async (c) => {
 });
 
 // --- POSTS ---
-app.get('/posts', async (c) => {
+api.get('/posts', async (c) => {
   try {
     const { db } = await import('../src/db');
     const { posts } = await import('../src/db/schema');
@@ -211,7 +220,7 @@ app.get('/posts', async (c) => {
   }
 });
 
-app.post('/posts', async (c) => {
+api.post('/posts', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -219,7 +228,7 @@ app.post('/posts', async (c) => {
     const { db } = await import('../src/db');
     const { posts } = await import('../src/db/schema');
     const body = await c.req.json();
-    const newPostId = uuidv4();
+    const newPostId = newId();
     await ensureUser(auth.userId);
     await db.insert(posts).values({
       id: newPostId,
@@ -241,7 +250,7 @@ app.post('/posts', async (c) => {
   }
 });
 
-app.post('/posts/:id/vote', async (c) => {
+api.post('/posts/:id/vote', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -267,7 +276,7 @@ app.post('/posts/:id/vote', async (c) => {
     } else {
       // Add vote
       await db.insert(postVotes).values({
-        id: uuidv4(),
+        id: newId(),
         postId,
         userId: auth.userId,
         vote: body.value,
@@ -289,7 +298,7 @@ app.post('/posts/:id/vote', async (c) => {
 });
 
 // --- SPACES ---
-app.get('/spaces', async (c) => {
+api.get('/spaces', async (c) => {
   try {
     const { db } = await import('../src/db');
 
@@ -301,7 +310,7 @@ app.get('/spaces', async (c) => {
   }
 });
 
-app.post('/spaces', async (c) => {
+api.post('/spaces', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -309,7 +318,7 @@ app.post('/spaces', async (c) => {
     const { db } = await import('../src/db');
     const { spaces, spaceMembers } = await import('../src/db/schema');
     const body = await c.req.json();
-    const newSpaceId = uuidv4();
+    const newSpaceId = newId();
     await ensureUser(auth.userId);
     
     await db.insert(spaces).values({
@@ -324,7 +333,7 @@ app.post('/spaces', async (c) => {
 
     // Add owner as member
     await db.insert(spaceMembers).values({
-      id: uuidv4(),
+      id: newId(),
       spaceId: newSpaceId,
       userId: auth.userId,
       role: 'owner',
@@ -338,7 +347,7 @@ app.post('/spaces', async (c) => {
   }
 });
 
-app.post('/spaces/:id/join', async (c) => {
+api.post('/spaces/:id/join', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -350,7 +359,7 @@ app.post('/spaces/:id/join', async (c) => {
     await ensureUser(auth.userId);
     
     await db.insert(spaceMembers).values({
-      id: uuidv4(),
+      id: newId(),
       spaceId,
       userId: auth.userId,
       role: 'member',
@@ -364,5 +373,9 @@ app.post('/spaces/:id/join', async (c) => {
   }
 });
 
-export { app };
+const app = new Hono();
+app.route('/api', api);
+app.route('/', api);
+
+export { app, api };
 export default handle(app);
