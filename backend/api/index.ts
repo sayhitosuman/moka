@@ -8,8 +8,8 @@ const api = new Hono();
 const secured = new Hono();
 
 const ensureUser = async (userId: string) => {
-  const { db } = await import('../src/db');
-  const { users } = await import('../src/db/schema');
+  const { db } = await import('../src/db/index.js');
+  const { users } = await import('../src/db/schema.js');
 
   await db.insert(users).values({
     id: userId,
@@ -81,7 +81,7 @@ api.get('/diagnostics/env', (c) => c.json({
 
 api.get('/diagnostics/db', async (c) => {
   try {
-    const { db } = await import('../src/db');
+    const { db } = await import('../src/db/index.js');
 
     await db.query.users.findMany({ limit: 1 });
     await db.query.posts.findMany({ limit: 1 });
@@ -100,8 +100,8 @@ api.post('/webhooks/clerk', async (c) => {
   if (body.type === 'user.created') {
     const data = body.data;
     try {
-      const { db } = await import('../src/db');
-      const { users } = await import('../src/db/schema');
+      const { db } = await import('../src/db/index.js');
+      const { users } = await import('../src/db/schema.js');
 
       await db.insert(users).values({
         id: data.id,
@@ -138,8 +138,8 @@ secured.get('/users/me', async (c) => {
   }
 
   try {
-    const { db } = await import('../src/db');
-    const { users } = await import('../src/db/schema');
+    const { db } = await import('../src/db/index.js');
+    const { users } = await import('../src/db/schema.js');
 
     const user = await db.query.users.findFirst({
       where: eq(users.id, auth.userId),
@@ -191,8 +191,8 @@ secured.post('/storage/signature', async (c) => {
 // --- POSTS ---
 secured.get('/posts', async (c) => {
   try {
-    const { db } = await import('../src/db');
-    const { posts } = await import('../src/db/schema');
+    const { db } = await import('../src/db/index.js');
+    const { posts } = await import('../src/db/schema.js');
 
     const allPosts = await db.query.posts.findMany({
       orderBy: [desc(posts.createdAt)],
@@ -236,8 +236,8 @@ secured.post('/posts', async (c) => {
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
-    const { db } = await import('../src/db');
-    const { posts } = await import('../src/db/schema');
+    const { db } = await import('../src/db/index.js');
+    const { posts } = await import('../src/db/schema.js');
     const body = await c.req.json();
     const newPostId = newId();
     await ensureUser(auth.userId);
@@ -266,8 +266,8 @@ secured.post('/posts/:id/vote', async (c) => {
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
-    const { db } = await import('../src/db');
-    const { posts, postVotes } = await import('../src/db/schema');
+    const { db } = await import('../src/db/index.js');
+    const { posts, postVotes } = await import('../src/db/schema.js');
     const postId = c.req.param('id');
     const body = await c.req.json(); // { value: 1 or -1 }
     
@@ -311,7 +311,7 @@ secured.post('/posts/:id/vote', async (c) => {
 // --- SPACES ---
 secured.get('/spaces', async (c) => {
   try {
-    const { db } = await import('../src/db');
+    const { db } = await import('../src/db/index.js');
 
     const allSpaces = await db.query.spaces.findMany();
     return c.json(allSpaces);
@@ -326,8 +326,8 @@ secured.post('/spaces', async (c) => {
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
-    const { db } = await import('../src/db');
-    const { spaces, spaceMembers } = await import('../src/db/schema');
+    const { db } = await import('../src/db/index.js');
+    const { spaces, spaceMembers } = await import('../src/db/schema.js');
     const body = await c.req.json();
     const newSpaceId = newId();
     await ensureUser(auth.userId);
@@ -363,8 +363,8 @@ secured.post('/spaces/:id/join', async (c) => {
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
   try {
-    const { db } = await import('../src/db');
-    const { spaceMembers } = await import('../src/db/schema');
+    const { db } = await import('../src/db/index.js');
+    const { spaceMembers } = await import('../src/db/schema.js');
     const spaceId = c.req.param('id');
     const body = await c.req.json(); // { isPrivate: boolean }
     await ensureUser(auth.userId);
