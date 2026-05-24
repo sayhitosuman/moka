@@ -47,6 +47,11 @@ const toStringArray = (value: unknown) => {
   }
 };
 
+const errorMessage = (err: unknown) => {
+  if (err instanceof Error) return err.message;
+  return String(err);
+};
+
 // Middleware to parse JSON
 api.use('*', async (c, next) => {
   // CORS configuration
@@ -73,6 +78,20 @@ api.get('/diagnostics/env', (c) => c.json({
   cloudinaryApiKey: Boolean(process.env.CLOUDINARY_API_KEY),
   cloudinaryApiSecret: Boolean(process.env.CLOUDINARY_API_SECRET),
 }));
+
+api.get('/diagnostics/db', async (c) => {
+  try {
+    const { db } = await import('../src/db');
+
+    await db.query.users.findMany({ limit: 1 });
+    await db.query.posts.findMany({ limit: 1 });
+
+    return c.json({ status: 'ok', message: 'Database query succeeded' });
+  } catch (err) {
+    console.error('Database diagnostics failed:', err);
+    return c.json({ status: 'error', message: errorMessage(err) }, 500);
+  }
+});
 
 // Webhook from Clerk to create user in Turso (no auth middleware)
 api.post('/webhooks/clerk', async (c) => {
@@ -102,8 +121,13 @@ api.post('/webhooks/clerk', async (c) => {
 
 // Clerk only on secured routes (never runs for /health)
 secured.use('*', async (c, next) => {
-  const { clerkMiddleware } = await import('@hono/clerk-auth');
-  return clerkMiddleware()(c, next);
+  try {
+    const { clerkMiddleware } = await import('@hono/clerk-auth');
+    return clerkMiddleware()(c, next);
+  } catch (err) {
+    console.error('Clerk middleware failed:', err);
+    return c.json({ error: 'Authentication middleware failed', message: errorMessage(err) }, 500);
+  }
 });
 
 // --- Users ---
@@ -203,7 +227,7 @@ secured.get('/posts', async (c) => {
     return c.json(mapped);
   } catch (err) {
     console.error(err);
-    return c.json({ error: 'Failed to fetch posts' }, 500);
+    return c.json({ error: 'Failed to fetch posts', message: errorMessage(err) }, 500);
   }
 });
 
@@ -233,7 +257,7 @@ secured.post('/posts', async (c) => {
     return c.json({ success: true, id: newPostId });
   } catch (err) {
     console.error(err);
-    return c.json({ error: 'Failed to create post' }, 500);
+    return c.json({ error: 'Failed to create post', message: errorMessage(err) }, 500);
   }
 });
 
