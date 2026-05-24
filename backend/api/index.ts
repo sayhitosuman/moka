@@ -1,21 +1,11 @@
 import { Hono } from 'hono';
-import { handle } from 'hono/vercel';
 import { eq, desc } from 'drizzle-orm';
 
 const newId = () => crypto.randomUUID();
 
-// Vercel may invoke this function with /health or /api/health depending on rewrites.
+// Vercel may invoke with /health, /api/health, or odd paths like /api/health.
 const api = new Hono();
-
-const PUBLIC_PATHS = new Set(['/health', '/diagnostics/env', '/webhooks/clerk']);
-
-const normalizePath = (path: string) => {
-  if (path === '/api' || path === '/api/') return '/';
-  if (path.startsWith('/api/')) return path.slice(4);
-  return path;
-};
-
-const isPublicPath = (path: string) => PUBLIC_PATHS.has(normalizePath(path));
+const secured = new Hono();
 
 const ensureUser = async (userId: string) => {
   const { db } = await import('../src/db');
@@ -110,17 +100,14 @@ api.post('/webhooks/clerk', async (c) => {
   return c.json({ success: true });
 });
 
-// Clerk Auth Middleware (skip public routes)
-api.use('*', async (c, next) => {
-  if (isPublicPath(c.req.path)) {
-    return next();
-  }
+// Clerk only on secured routes (never runs for /health)
+secured.use('*', async (c, next) => {
   const { clerkMiddleware } = await import('@hono/clerk-auth');
   return clerkMiddleware()(c, next);
 });
 
 // --- Users ---
-api.get('/users/me', async (c) => {
+secured.get('/users/me', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) {
     return c.json({ error: 'Unauthorized' }, 401);
@@ -145,7 +132,7 @@ api.get('/users/me', async (c) => {
 });
 
 // --- Storage (Cloudinary) ---
-api.post('/storage/signature', async (c) => {
+secured.post('/storage/signature', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -178,7 +165,7 @@ api.post('/storage/signature', async (c) => {
 });
 
 // --- POSTS ---
-api.get('/posts', async (c) => {
+secured.get('/posts', async (c) => {
   try {
     const { db } = await import('../src/db');
     const { posts } = await import('../src/db/schema');
@@ -220,7 +207,7 @@ api.get('/posts', async (c) => {
   }
 });
 
-api.post('/posts', async (c) => {
+secured.post('/posts', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -250,7 +237,7 @@ api.post('/posts', async (c) => {
   }
 });
 
-api.post('/posts/:id/vote', async (c) => {
+secured.post('/posts/:id/vote', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -298,7 +285,7 @@ api.post('/posts/:id/vote', async (c) => {
 });
 
 // --- SPACES ---
-api.get('/spaces', async (c) => {
+secured.get('/spaces', async (c) => {
   try {
     const { db } = await import('../src/db');
 
@@ -310,7 +297,7 @@ api.get('/spaces', async (c) => {
   }
 });
 
-api.post('/spaces', async (c) => {
+secured.post('/spaces', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -347,7 +334,7 @@ api.post('/spaces', async (c) => {
   }
 });
 
-api.post('/spaces/:id/join', async (c) => {
+secured.post('/spaces/:id/join', async (c) => {
   const auth = await getRequestAuth(c);
   if (!auth?.userId) return c.json({ error: 'Unauthorized' }, 401);
 
@@ -373,9 +360,12 @@ api.post('/spaces/:id/join', async (c) => {
   }
 });
 
+api.route('/', secured);
+
 const app = new Hono();
 app.route('/api', api);
 app.route('/', api);
 
-export { app, api };
-export default handle(app);
+export { app, api, secured };
+// Vercel Hono: export the app directly (not handle()) so responses are sent correctly
+export default app;
