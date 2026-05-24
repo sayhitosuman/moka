@@ -3,7 +3,10 @@ import { handle } from 'hono/vercel';
 import { eq, desc } from 'drizzle-orm';
 import { v4 as uuidv4 } from 'uuid';
 
-const app = new Hono().basePath('/api');
+// Routes are /health, /posts, etc. Vercel's api/ folder already serves under /api/*.
+const app = new Hono();
+
+const PUBLIC_PATHS = new Set(['/health', '/diagnostics/env', '/webhooks/clerk']);
 
 const ensureUser = async (userId: string) => {
   const { db } = await import('../src/db');
@@ -72,8 +75,37 @@ app.get('/diagnostics/env', (c) => c.json({
   cloudinaryApiSecret: Boolean(process.env.CLOUDINARY_API_SECRET),
 }));
 
-// Clerk Auth Middleware
+// Webhook from Clerk to create user in Turso (no auth middleware)
+app.post('/webhooks/clerk', async (c) => {
+  const body = await c.req.json();
+
+  if (body.type === 'user.created') {
+    const data = body.data;
+    try {
+      const { db } = await import('../src/db');
+      const { users } = await import('../src/db/schema');
+
+      await db.insert(users).values({
+        id: data.id,
+        displayName: data.username || data.first_name || 'Anonymous',
+        fullName: `${data.first_name || ''} ${data.last_name || ''}`.trim(),
+        photoUrl: data.image_url,
+      });
+      return c.json({ success: true });
+    } catch (e) {
+      console.error(e);
+      return c.json({ error: 'Failed to insert user' }, 500);
+    }
+  }
+
+  return c.json({ success: true });
+});
+
+// Clerk Auth Middleware (skip public routes)
 app.use('*', async (c, next) => {
+  if (PUBLIC_PATHS.has(c.req.path)) {
+    return next();
+  }
   const { clerkMiddleware } = await import('@hono/clerk-auth');
   return clerkMiddleware()(c, next);
 });
@@ -101,33 +133,6 @@ app.get('/users/me', async (c) => {
     console.error(err);
     return c.json({ error: 'Internal Server Error' }, 500);
   }
-});
-
-// Webhook from Clerk to create user in Turso
-app.post('/webhooks/clerk', async (c) => {
-  // Add signature verification here in production
-  const body = await c.req.json();
-  
-  if (body.type === 'user.created') {
-    const data = body.data;
-    try {
-      const { db } = await import('../src/db');
-      const { users } = await import('../src/db/schema');
-
-      await db.insert(users).values({
-        id: data.id,
-        displayName: data.username || data.first_name || 'Anonymous',
-        fullName: `${data.first_name || ''} ${data.last_name || ''}`.trim(),
-        photoUrl: data.image_url,
-      });
-      return c.json({ success: true });
-    } catch (e) {
-      console.error(e);
-      return c.json({ error: 'Failed to insert user' }, 500);
-    }
-  }
-
-  return c.json({ success: true });
 });
 
 // --- Storage (Cloudinary) ---
